@@ -1,8 +1,8 @@
 # Mr Zappy PCB V2 — production firmware (single nRF52840)
 
 Merged port of the V1 two-board system onto the Raytac MDBT50Q-U1MV2 module:
-everything from `../Main board C++/` (sensors, display, laser, survey logic,
-calibration) plus the SAP6 BLE protocol from `../DiscoX C++ BLE/` now runs
+everything from `../V1/Main board C++/` (sensors, display, laser, survey logic,
+calibration) plus the SAP6 BLE protocol from `../V1/DiscoX C++ BLE/` now runs
 in-process on one MCU. The V1 UART bridge (SERCOM1, DRDY handshake,
 `COMPASS:`/`ALIVE`/`NAME:` lines, READY/ACK strings) is gone.
 
@@ -64,7 +64,7 @@ firmware hangs.
   runs before `Wire.begin()` in setup() — don't reorder.
 - **Coded PHY needs the patched global Bluefruit library**
   (`BLEConnection.cpp` ~line 392 answers PHY update requests with
-  `BLE_GAP_PHY_CODED`, see "BLE Long Range" in `../DiscoX C++ BLE/CLAUDE.md`).
+  `BLE_GAP_PHY_CODED`, see "BLE Long Range" in `../V1/DiscoX C++ BLE/CLAUDE.md`).
   A platform/framework update reverts it silently — if a previously-Coded
   phone reports 1 Mbps, check there FIRST.
 - `Bluefruit.configPrphConn(…, 24, …)` must run **before** `Bluefruit.begin()`
