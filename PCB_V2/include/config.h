@@ -1,8 +1,13 @@
 #pragma once
 
+// <Arduino.h> MUST come before "pins_v2.h": the pca10056 board variant we
+// build against #defines PIN_BUTTON1..4 for the DK's own on-board buttons
+// (pins 11/12/24/25). pins_v2.h re-#defines those names to THIS board's
+// button pins (27/35/37/39) and must be processed last, or button_manager.cpp
+// (which pulls this header before any Arduino.h) silently reads the DK's pins.
 #include "defaults.h"
-#include "pins_v2.h"
 #include <Arduino.h>
+#include "pins_v2.h"
 
 // PCB V2 — single nRF52840 (Raytac MDBT50Q-U1MV2). All physical pins come
 // from pins_v2.h (canonical, cross-checked against
@@ -33,7 +38,7 @@ constexpr uint16_t RM3100_CYCLE_COUNT = 400;
 
 // ── I2C addresses ───────────────────────────────────────────────────
 constexpr uint8_t MAX17048_ADDR = 0x36; // Battery gauge
-constexpr uint8_t SH1107_ADDR = 0x3D;   // OLED display
+constexpr uint8_t SH1107_ADDR = 0x3C;   // OLED display (V2 panel straps SA0 low; V1 was 0x3D — verified on hardware 2026-07-07)
 constexpr uint8_t SH1107_WIDTH = 128;
 constexpr uint8_t SH1107_HEIGHT = 128;
 

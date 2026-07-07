@@ -28,6 +28,13 @@
 #define PIN_LASER_RX 25 // nRF RX <- laser TXD, module pin 49, P0.25, net TX
 
 // --- Buttons (active LOW, use INPUT_PULLUP) ---
+// The pca10056 board variant already #defines PIN_BUTTON1..4 for the DK's
+// on-board buttons (pins 11/12/24/25) — undef so our board's pins win. This
+// header must be included AFTER <Arduino.h> for the undef to take effect.
+#undef PIN_BUTTON1
+#undef PIN_BUTTON2
+#undef PIN_BUTTON3
+#undef PIN_BUTTON4
 #define PIN_BUTTON1 27 // module pin 16, P0.27, net BUTTON1
 #define PIN_BUTTON2 35 // module pin 60, P1.03, net BUTTON2
 #define PIN_BUTTON3 37 // module pin 59, P1.05, net BUTTON3

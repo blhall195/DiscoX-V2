@@ -1,8 +1,8 @@
 # Mr Zappy PCB V2 — production firmware (single nRF52840)
 
 Merged port of the V1 two-board system onto the Raytac MDBT50Q-U1MV2 module:
-everything from `../V1/Main board C++/` (sensors, display, laser, survey logic,
-calibration) plus the SAP6 BLE protocol from `../V1/DiscoX C++ BLE/` now runs
+everything from `../Main board C++/` (sensors, display, laser, survey logic,
+calibration) plus the SAP6 BLE protocol from `../DiscoX C++ BLE/` now runs
 in-process on one MCU. The V1 UART bridge (SERCOM1, DRDY handshake,
 `COMPASS:`/`ALIVE`/`NAME:` lines, READY/ACK strings) is gone.
 
@@ -60,11 +60,18 @@ firmware hangs.
 
 ## Gotchas (inherited + new)
 
+- **`PIN_BUTTON1..4` collide with the pca10056 variant** (the DK's on-board
+  buttons at pins 11/12/24/25). `config.h` therefore includes `<Arduino.h>`
+  **before** `pins_v2.h`, and `pins_v2.h` `#undef`s the four names before
+  redefining them to this board's pins (27/35/37/39). Do not reorder those
+  includes — with `pins_v2.h` first, the variant's values win in whatever
+  translation unit pulls `config.h` before any Arduino header (this silently
+  made `button_manager.cpp` read the DK's buttons; fixed 2026-07-07).
 - **I2C pins are not variant defaults**: `Wire.setPins(PIN_I2C_SDA, PIN_I2C_SCL)`
   runs before `Wire.begin()` in setup() — don't reorder.
 - **Coded PHY needs the patched global Bluefruit library**
   (`BLEConnection.cpp` ~line 392 answers PHY update requests with
-  `BLE_GAP_PHY_CODED`, see "BLE Long Range" in `../V1/DiscoX C++ BLE/CLAUDE.md`).
+  `BLE_GAP_PHY_CODED`, see "BLE Long Range" in `../DiscoX C++ BLE/CLAUDE.md`).
   A platform/framework update reverts it silently — if a previously-Coded
   phone reports 1 Mbps, check there FIRST.
 - `Bluefruit.configPrphConn(…, 24, …)` must run **before** `Bluefruit.begin()`
@@ -72,6 +79,18 @@ firmware hangs.
   fail with 0x0013 NRF_ERROR_RESOURCES.
 - **`Uart::end()` hangs if the UART was never begun** — initLaser() only ever
   begins Serial1 once; keep it that way.
+- **Laser probe must be retried at boot.** On a cold power-button boot the
+  ENA-gated LDJ-100 powers up with the MCU and spends ~2.5 s in an auto-baud
+  window where it won't answer a fixed-baud read. `initLaser()` retries the
+  probe (~15×) instead of a single early ping — a single ping latches
+  `laserOk=false` for the whole session, and the symptom is FIRE only ever
+  printing "getting ready for a shot" and never measuring. (Warm USB-reflash
+  resets hide this because the module is already awake.) Don't revert to a
+  one-shot ping.
+- **FIRE is a two-press trigger**: first press wakes the laser to aim
+  (`prepareForShot`, `laserEnabled=false→true`), second press measures
+  (`startShot`). Entering the menu turns the laser off, so the first FIRE
+  after exiting the menu is always a wake press.
 - Laser UART: RX (P0.25) needs `INPUT_PULLUP` (module TXD is open drain);
   TX/RX net names in the netlist are from the laser's perspective.
 - `<ArduinoEigenDense.h>`, never `<ArduinoEigen.h>` (SparseLU macro clash).
@@ -94,8 +113,11 @@ firmware hangs.
    differ. Determine real mappings from streamed raw data, then run a full
    on-device calibration (56-pt ellipsoid + 24-pt alignment + F/B check).
    The embedded `CALIBRATION_JSON` fallback in main.cpp is V1 data.
-2. OLED and buttons bring-up tests were still unrun on hardware at merge
-   time (`../PCB_V2 test/` status table).
+2. OLED electrically verified on hardware 2026-07-07 (I2C ACK + `begin()`,
+   pattern cycle running) — this exposed that the V2 panel is at **0x3C**,
+   not V1's 0x3D, so `SH1107_ADDR` (config.h) was corrected. Still needs a
+   visual by-eye confirm of the image, and the buttons bring-up test is
+   still unrun on hardware (`../PCB_V2 test/` status table).
 3. Accel motion threshold (`ACCEL_MOTION_THRESHOLD`, main.cpp) and the EMA
    alphas need field tuning — V1 gated these on the gyro, which V2 lacks.
 4. BLE needs a phone run (SexyTopo / nRF Connect): 17-byte legs, ACK/seq
@@ -105,5 +127,25 @@ firmware hangs.
 
 ## Status
 
-- 2026-07-07: initial merge complete — builds clean
-  (RAM 8.7%, flash 45.2%). Not yet verified on hardware.
+- 2026-07-07: initial merge complete — builds clean (RAM 8.7%, flash 45.2%).
+- 2026-07-07: **first hardware bring-up of the merged firmware PASSED the core
+  spine.** Flashed via USB DFU; serial shows the loop running with live,
+  stable sensor fusion (`>azimuth:176.8 >inclination:0.5` at ~4 Hz — RM3100
+  over I2C + SCA3300 over SPIM2, converted to m/s², through the ported
+  calibration pipeline) and the battery gauge (`BAT: 4.145V 76.0%`). OLED
+  init succeeds at 0x3C, so `dispOk` is true.
+- 2026-07-07: **buttons, laser measurement, and menu verified on hardware**
+  after fixing the `PIN_BUTTON1..4` variant collision (see Gotchas). FIRE
+  runs the full measurement pipeline (laser returns real distances, e.g.
+  187/725/778 mm); MENU opens/exits the settings menu.
+- 2026-07-07: fixed a **cold-boot laser init failure** (single early ping →
+  `laserOk=false` → FIRE never measures; now retried past the module's
+  auto-baud window — see Gotchas). Verified on a cold power-button boot: full
+  two-press measurement `MEAS OK: AZ=180.6 INC=0.2 DIST=0.32`, and the
+  offline path queued the leg to flash (BLE not connected). Measurements may
+  report `anomaly: MagErr` — expected, the calibration is still the V1
+  placeholder (commissioning item #1), not a firmware fault.
+- Still unexercised on hardware: buzzer beeps (audible), disco animation,
+  calibration/snake UI flows, and the BLE phone link — plus the full
+  commissioning checklist above (real axis mappings + calibration is the
+  big one).

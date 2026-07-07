@@ -1490,9 +1490,25 @@ static void initLaser() {
     pinMode(PIN_LASER_RX, INPUT_PULLUP);
     Serial1.begin(LASER_UART_BAUD_LDJ100);
     delay(20);
-    laserOk = laser.begin(Serial1, buzzer);
+
+    // Retry the probe instead of a single early ping. On a COLD power-button
+    // boot the laser rail (ENA-gated) comes up with the MCU, and the module
+    // spends its first ~2.5 s in an auto-baud window where it won't answer a
+    // fixed-baud read. A single 20 ms-in ping fails there, latching
+    // laserOk=false for the whole session — the symptom is FIRE only ever
+    // printing "getting ready for a shot" and never measuring. Warm USB-reflash
+    // resets happen to work because the module is already up. ~15 attempts of
+    // (≤300 ms ping + 100 ms) covers the wake-up/auto-baud window (~4-6 s worst
+    // case only when the laser is truly absent; a healthy module answers fast).
+    laserOk = false;
+    for (int attempt = 0; attempt < 15 && !laserOk; attempt++) {
+        laserOk = laser.begin(Serial1, buzzer);
+        if (!laserOk) {
+            delay(100);
+        }
+    }
     Serial.print(F("Laser:       "));
-    Serial.println(laserOk ? F("OK (LDJ-100 @ 115200)") : F("FAILED"));
+    Serial.println(laserOk ? F("OK (LDJ-100 @ 115200)") : F("FAILED (no response after retries)"));
 
     laserOff();
 

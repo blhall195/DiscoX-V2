@@ -8,11 +8,13 @@ The board has been redesigned around a single Raytac MDBT50Q-U1MV2 (nRF52840)
 module that replaces both V1 MCUs. Two folders:
 
 - **`PCB_V2/`** — the merged production firmware (V1 main board + DiscoX BLE
-  ported in-process; the UART bridge is gone). Builds clean as of 2026-07-07;
-  hardware commissioning (axis mapping, calibration, phone test) still
-  pending. **Read `PCB_V2/CLAUDE.md` first when working on V2** — build/flash
-  instructions (`pio run -t upload` from `PCB_V2/`, USB DFU, VID 239A),
-  V1→V2 seam table, button roles, gotchas, commissioning checklist.
+  ported in-process; the UART bridge is gone). Runs on hardware as of
+  2026-07-07: sensor fusion, buttons, laser measurement, and menu all
+  verified live; commissioning still pending (real axis mappings + full
+  calibration, BLE phone test). **Read `PCB_V2/CLAUDE.md` first when working
+  on V2** — build/flash instructions (`pio run -t upload` from `PCB_V2/`,
+  USB DFU, VID 239A), V1→V2 seam table, button roles, gotchas,
+  commissioning checklist.
 - **`PCB_V2 test/`** — frozen per-IC hardware bring-up tests plus the decoded
   netlist (`hardware/NETLIST.md`) and datasheets. Its CLAUDE.md has the
   per-IC verification status and the pattern for adding IC tests. Come back
@@ -78,7 +80,13 @@ Same in V1 and V2 (V1 implemented in `V1/DiscoX C++ BLE/`, V2 in-process in `PCB
 
 ## Current Status
 - V1: calibration working, accurate to within 1 degree (commit 8682252)
-- **PCB V2 merged firmware written** (2026-07-07, `PCB_V2/`) — builds clean;
-  commissioning pending: axis mappings + full calibration, OLED/buttons
-  bring-up runs, accel motion-threshold tuning, BLE phone test
+- **PCB V2 merged firmware running on hardware** (2026-07-07, `PCB_V2/`) —
+  first bring-up passed the core spine: live sensor fusion (RM3100 + SCA3300
+  through the ported calibration pipeline), battery gauge, OLED (at 0x3C —
+  corrected from V1's 0x3D), buttons, laser measurement, and menu all
+  verified on the board. Measurements flag `anomaly: MagErr` because the
+  calibration is still V1 placeholder data — expected, not a fault.
+- V2 commissioning still pending: real `MAG_AXES`/`GRAV_AXES` + full
+  on-device calibration, accel motion-threshold tuning, buzzer/disco/
+  calibration-UI exercises, BLE phone test
   (see `PCB_V2/CLAUDE.md` checklist and `PCB_V2 test/CLAUDE.md` status table)
