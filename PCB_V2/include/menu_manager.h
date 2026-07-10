@@ -17,6 +17,7 @@ enum class MenuExitAction : uint8_t {
     ENTER_FB_CHECK,    // enter foresight/backsight field check
     ENTER_BOOTLOADER,  // reboot into UF2 bootloader for firmware update
     REFORMAT_FLASH,    // format internal LittleFS (recovery), then reboot
+    ENTER_USB_DRIVE,   // reboot into USB drive mode (edit settings on a PC)
 };
 
 class MenuManager {
@@ -91,6 +92,7 @@ class MenuManager {
     static void viewLastCal(int);
     static void enterSnakeGame(int);
     static void enterBootloader(int);
+    static void enterUsbDrive(int);
     static void reformatFlash(int);
     static void setScreenBrightness(int value);
     static void setMeasureFromFront(int);

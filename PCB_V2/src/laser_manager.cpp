@@ -1,7 +1,8 @@
 #include "laser_manager.h"
 
-bool LaserManager::begin(Stream &serial, Buzzer &buzzer) {
-    _buzzer = &buzzer;
+#include "sounds.h"
+
+bool LaserManager::begin(Stream &serial) {
     _ldj.begin(serial);
     return _ldj.ping(300);
 }
@@ -16,8 +17,8 @@ LaserError LaserManager::setLaser(bool on) {
 }
 
 LaserError LaserManager::setBuzzer(bool on) {
-    if (on && _buzzer != nullptr) {
-        _buzzer->beep(40);
+    if (on) {
+        Sounds::click();
     }
     _lastError = LaserError::OK;
     return _lastError;
@@ -27,31 +28,6 @@ LaserError LaserManager::stopMeasuring() {
     _ldj.stopContinuous();
     _lastError = LaserError::OK;
     return _lastError;
-}
-
-void LaserManager::singleBeep() {
-    if (_buzzer != nullptr) {
-        _buzzer->beep(30);
-    }
-}
-
-void LaserManager::doubleBeep() {
-    if (_buzzer != nullptr) {
-        _buzzer->beep(30);
-        delay(60);
-        _buzzer->beep(30);
-    }
-}
-
-void LaserManager::failureBeep() {
-    // Lower pitch + triple pulse so it reads as "error" next to the crisp
-    // 4 kHz single/double beeps.
-    if (_buzzer != nullptr) {
-        for (int i = 0; i < 3; i++) {
-            _buzzer->tone(2500, 60);
-            delay(40);
-        }
-    }
 }
 
 void LaserManager::wibble() {

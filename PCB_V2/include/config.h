@@ -48,15 +48,16 @@ constexpr uint8_t SH1107_HEIGHT = 128;
 constexpr uint8_t NEOPIXEL_COUNT = 1;
 
 // ── Calibration axis mappings ───────────────────────────────────────
-// ⚠ PLACEHOLDERS — V1 PCB values. The V2 board mounts an SCA3300 (not the
-// ISM330DHCX) and the RM3100 sits in a new position/orientation. Determine
-// the real mappings from streamed raw data during commissioning, then run a
-// full calibration (56-pt ellipsoid + 24-pt alignment + F/B check).
-constexpr char MAG_AXES[] = "-X-Y-Z";
-constexpr char GRAV_AXES[] = "-Y-X+Z";
+// V2 values determined empirically 2026-07-10 from raw-axis snapshots in
+// three known poses (level / laser down / rolled 90°): device X (right) =
+// +rawY, Y (laser) = -rawX, Z (up) = ±rawZ. Verified consistent across both
+// sensors and all poses. Full on-device calibration (56-pt ellipsoid +
+// 24-pt alignment + F/B check) still required.
+constexpr char MAG_AXES[] = "+Y-X+Z";
+constexpr char GRAV_AXES[] = "+Y-X-Z";
 
 // ── System power-off hook ───────────────────────────────────────────
-// Defined in main.cpp: syncs pending data, beeps, then drives KILL LOW via
+// Defined in main.cpp: syncs pending data, then drives KILL LOW via
 // the LTC2954 (never returns). Used by menu/snake auto-shutdown paths that
 // used to write V1's PIN_POWER directly.
 void systemPowerOff();

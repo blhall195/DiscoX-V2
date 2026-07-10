@@ -18,16 +18,21 @@
 #include "rm3100.h"
 #include "sensor_manager.h"
 #include "snake_game.h"
+#include "sounds.h"
+#include "usb_drive.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <cstdint>
 
 // ── Embedded calibration data ──────────────────────────────────────
-// From Main board/calibration_dict.json — loaded at startup
+// From Main board/calibration_dict.json — loaded at startup.
+// Axes updated to the V2 mappings (2026-07-10, see config.h); the
+// transform/centre/rbf data is still V1's and only roughly valid — expect
+// MagErr until a full V2 on-device calibration replaces this fallback.
 static const char CALIBRATION_JSON[] PROGMEM = R"({
   "mag": {
-    "axes": "-X-Y-Z",
+    "axes": "+Y-X+Z",
     "transform": [[0.0225258, -0.000348105, -0.000709316],
                    [0.000171691, 0.0221358, -0.000679377],
                    [0.000447533, -0.000145672, 0.0225338]],
@@ -40,7 +45,7 @@ static const char CALIBRATION_JSON[] PROGMEM = R"({
   },
   "dip_avg": 68.9221,
   "grav": {
-    "axes": "-Y-X+Z",
+    "axes": "+Y-X-Z",
     "transform": [[0.101936, -0.00167875, 0.000143624],
                    [0.0015862, 0.10164, 0.000604115],
                    [0.000153489, -0.000228592, 0.102199]],
@@ -92,6 +97,14 @@ static bool enterSnakeMode = false;
 static float lastMagX = 0, lastMagY = 0, lastMagZ = 0;
 static float lastAccX = 0, lastAccY = 0, lastAccZ = 0;
 
+// ── Raw-axis snapshot (commissioning: determine MAG_AXES/GRAV_AXES) ──
+// Type 'r' in the serial monitor to print one line of the RM3100 and
+// SCA3300 axes exactly as the chips report them (before Axes::fixAxes),
+// so the sensor→device mapping can be read off from known poses.
+// Type 's' to silence/resume the continuous >azimuth/>inclination teleplot
+// stream so the snapshot lines are easy to copy.
+static bool teleplotEnabled = true;
+
 // ── Accel-derived motion detection (V2 has no gyro) ────────────────
 // V1 gated the fusion alpha and the display freeze on gyro magnitude; the
 // SCA3300 is accel-only, so motion is inferred from the deviation of the
@@ -115,11 +128,7 @@ static bool fieldCheckDone = false;
 // ── Display deadband (prevents ±0.1 flicker when stationary) ────────
 static float dispAz = 0.0f;                    // currently displayed azimuth
 static float dispInc = 0.0f;                   // currently displayed inclination
-static constexpr float DEADBAND_ANGLE = 0.15f; // degrees
-static uint32_t motionStillSince = 0;          // millis() when motion first dropped below threshold
-static float anchorAz = 0.0f;                  // azimuth when settled — display clamped to ±0.1°
-static float anchorInc = 0.0f;                 // inclination when settled
-static bool anchored = false;                  // true once settle period has elapsed
+static constexpr float DEADBAND_ANGLE = 0.10f; // degrees
 
 // ── Timing statics ──────────────────────────────────────────────────
 static uint32_t lastSensorUpdate = 0;
@@ -177,10 +186,11 @@ static void handleMeasurementSuccess();
 static void alertError(const char *errCode);
 static void resetLaser();
 static void doShutdown();
+static void enterUsbDriveMode(); // modal USB MSC settings drive — reboots on exit
 static void onFlushReading(float az, float inc, float dist);
 
 const bool REGULAR_SHOT = false;
-const bool QUCK_SHOT = true;
+const bool QUICK_SHOT = true;
 
 void laserOn() {
     if (!laserOk) {
@@ -208,6 +218,7 @@ void setup() {
     // the boot-hold guard in pollPowerButton keeps it from powering us off.)
     power.begin(PIN_KILL, PIN_PB_INT, PIN_PGOOD);
     buzzer.begin(PIN_BUZZER_A, PIN_BUZZER_B);
+    Sounds::begin(buzzer);
 
     // Init laser so it can be turned off immediately (rail is ENA-gated and
     // already up; the LDJ-100 boots with the diode off, so this is belt+braces).
@@ -223,7 +234,28 @@ void setup() {
     // Configure button pull-ups BEFORE reading them
     pinMode(PIN_BTN_FIRE, INPUT_PULLUP);
     pinMode(PIN_BTN_MENU, INPUT_PULLUP);
+    pinMode(PIN_BTN_DOWN, INPUT_PULLUP);
     delayMicroseconds(50); // let pull-ups settle before reading
+
+    // ── Early USB drive mode check ─────────────────────────────────
+    // Must happen BEFORE any Serial use so the MSC interface is part of
+    // the initial USB enumeration. Entered by EITHER the usb_drive flag
+    // (set from the menu) OR by holding DOWN (B3) at power-on. The button
+    // path needs no flash read/write, so it still works when LittleFS is
+    // broken — it's the recovery route to reformat the partition from a PC.
+    // (FIRE-at-boot is taken by the serial-debug hold below, hence DOWN.)
+    {
+        flashOk = configMgr.begin(); // idempotent — initFlash() re-checks later
+        bool usbByFlag = flashOk && configMgr.hasFlag(Flags::USB_DRIVE);
+        bool usbByButton = (digitalRead(PIN_BTN_DOWN) == LOW);
+        if (usbByFlag || usbByButton) {
+            if (usbByFlag) {
+                configMgr.clearFlag(Flags::USB_DRIVE);
+            }
+            UsbDrive::beginMsc(); // register MSC BEFORE the host enumerates
+            enterUsbDriveMode();  // modal — reboots or powers off, never returns
+        }
+    }
 
     // Normal boot — show splash screen
     uint32_t splashStart = millis();
@@ -514,6 +546,42 @@ void loop() {
         // Does not return
     }
 
+    // USB drive mode (edit settings/calibration on a PC)
+    if (menuMgr.exitAction() == MenuExitAction::ENTER_USB_DRIVE) {
+        menuMgr.clearExitAction();
+        Serial.println(F("Rebooting into USB drive mode..."));
+        bool flagged = flashOk && configMgr.writeFlag(Flags::USB_DRIVE);
+        if (dispOk) {
+            auto &d = display.getDisplay();
+            d.clearDisplay();
+            d.setTextSize(1);
+            d.setTextColor(SH110X_WHITE);
+            d.setCursor(0, 20);
+            if (flagged) {
+                d.println(F("Restarting into"));
+                d.println(F("USB drive mode..."));
+            } else {
+                // Flag write failed (storage broken) — tell the user the
+                // button route, which needs no flash writes at all.
+                d.println(F("Storage error."));
+                d.println();
+                d.println(F("Hold DOWN (B3) while"));
+                d.println(F("powering on for USB"));
+                d.println(F("drive mode."));
+            }
+            d.display();
+        }
+        delay(flagged ? 1000 : 4000);
+        if (flagged) {
+            NVIC_SystemReset();
+            // Does not return
+        }
+        display.initScreen();
+        ctx.lastActivityTime = millis();
+        delay(Timing::LOOP_INTERVAL_MS);
+        return;
+    }
+
     // Reformat internal storage (recovery)
     if (menuMgr.exitAction() == MenuExitAction::REFORMAT_FLASH) {
         menuMgr.clearExitAction();
@@ -639,6 +707,51 @@ static void readSensorsUpdate(uint32_t now) {
         }
     }
 
+    // Raw-axis snapshot for axis-mapping commissioning (press 'r')
+    if (Serial.available()) {
+        int c = Serial.read();
+        if (c == 's' || c == 'S') {
+            teleplotEnabled = !teleplotEnabled;
+            Serial.println(teleplotEnabled ? F("Teleplot stream ON") : F("Teleplot stream OFF"));
+        } else if (c == 'f' || c == 'F') {
+            // Reset filter tuning to firmware defaults — a stored config.json
+            // otherwise shadows new defaults forever (loadConfig prefers it).
+            ctx.config.emaAlphaStable = Defaults::emaAlphaStable;
+            ctx.config.emaAlphaMoving = Defaults::emaAlphaMoving;
+            ctx.config.stabilityBufferLength = Defaults::stabilityBufferLength;
+            bool saved = flashOk && configMgr.saveConfig(ctx.config);
+            if (calOk) {
+                sensorMgr.init(&calibration, ctx.config.emaAlphaStable, ctx.config.emaAlphaMoving,
+                               ctx.config.stabilityBufferLength, Defaults::emaJumpThreshold);
+            }
+            Serial.print(F("Filter reset: EMA stable="));
+            Serial.print(ctx.config.emaAlphaStable, 2);
+            Serial.print(F(", moving="));
+            Serial.print(ctx.config.emaAlphaMoving, 2);
+            Serial.print(F(", stability buf="));
+            Serial.print(ctx.config.stabilityBufferLength);
+            Serial.println(saved ? F(" (saved)") : F(" (NOT saved — storage error)"));
+        } else if (c == 'c' || c == 'C') {
+            Serial.println(F("--- /config.json ---"));
+            if (!configMgr.printConfig(Serial)) {
+                Serial.println(F("(no config file — running on defaults)"));
+            }
+        } else if (c == 'r' || c == 'R') {
+            Serial.print(F("RAW mag uT  X="));
+            Serial.print(lastMagX, 2);
+            Serial.print(F(" Y="));
+            Serial.print(lastMagY, 2);
+            Serial.print(F(" Z="));
+            Serial.print(lastMagZ, 2);
+            Serial.print(F("  |  acc m/s2  X="));
+            Serial.print(lastAccX, 2);
+            Serial.print(F(" Y="));
+            Serial.print(lastAccY, 2);
+            Serial.print(F(" Z="));
+            Serial.println(lastAccZ, 2);
+        }
+    }
+
     if (calOk && magOk && accelOk) {
         Eigen::Vector3f rawMag(lastMagX, lastMagY, lastMagZ);
         Eigen::Vector3f rawGrav(lastAccX, lastAccY, lastAccZ);
@@ -732,7 +845,7 @@ static void startShot(bool isQuickShot) {
         disco.setRed();
     }
 
-    laser.singleBeep();
+    Sounds::shotStart();
 }
 
 
@@ -776,10 +889,10 @@ static void pollButtons(uint32_t now) {
                 discoTriggered = false;
             } else {
                 if (ctx.config.splaysEnabled) {
-                    ctx.laserEnabled ? startShot(QUCK_SHOT) : prepareForShot();
+                    ctx.laserEnabled ? startShot(QUICK_SHOT) : prepareForShot();
                 } else {
                     showSplaysDisabledToast();
-                    laser.failureBeep();
+                    Sounds::warning();
                 }
             }
             return;
@@ -991,7 +1104,7 @@ static void handleMeasurementSuccess() {
     if (ctx.quickShot) {
         Serial.println(F("  HS:3 quick shot — skipping leg buf"));
         ctx.measurementTaken = false;
-        laser.singleBeep();
+        Sounds::readingOk();
         // If doing quick shots, prepare again immediately
         prepareForShot();
         return;
@@ -1005,15 +1118,10 @@ static void handleMeasurementSuccess() {
     Serial.flush();
 
     if (ctx.shotBuf.hasValidLeg()) {
-        // Triple buzz + white flash
-        for (int i = 0; i < 3; i++) {
-            laser.setBuzzer(true);
-            disco.setWhite();
-            delay(100);
-            laser.setBuzzer(false);
-            disco.turnOff();
-            delay(100);
-        }
+        // Rising fanfare under a white flash (was: triple buzz + flash)
+        disco.setWhite();
+        Sounds::legComplete();
+        disco.turnOff();
 
         // Laser wibble to indicate leg detected
         if (ctx.config.laserWibble) {
@@ -1033,7 +1141,7 @@ static void handleMeasurementSuccess() {
 
     // Successful reading but leg not complete
     // (function already returned if leg complete)
-    laser.doubleBeep();
+    Sounds::readingOk();
 
     Serial.println(F("  HS:5 done"));
     Serial.flush();
@@ -1057,7 +1165,7 @@ static void alertError(const char *errCode) {
     }
 
     // Beep after error flashes
-    laser.failureBeep();
+    Sounds::error();
 
     // Re-enable laser
     laser.setLaser(true);
@@ -1326,49 +1434,27 @@ static void updateDisplay(uint32_t now) {
             liveInc = radiansToDegrees(atan2f(lastAccZ, sqrtf(lastAccX * lastAccX + lastAccY * lastAccY)));
         }
 
-        // Motion-gated freeze: only update displayed values when device is
-        // moving (accel-derived on V2 — no gyro). A short settle delay lets
-        // the EMA converge before locking.
-        bool moving = deviceMoving;
-        if (moving) {
-            motionStillSince = now; // reset settle timer
-            anchored = false;
-            // Device is moving — update displayed values (with deadband)
-            if (circularDiff(liveAz, dispAz) > DEADBAND_ANGLE) {
-                dispAz = liveAz;
-            }
-            if (fabsf(liveInc - dispInc) > DEADBAND_ANGLE) {
-                dispInc = liveInc;
-            }
-        } else if ((now - motionStillSince) < Defaults::gyroSettleMs) {
-            // Still settling — keep updating so EMA can converge
-            if (circularDiff(liveAz, dispAz) > DEADBAND_ANGLE) {
-                dispAz = liveAz;
-            }
-            if (fabsf(liveInc - dispInc) > DEADBAND_ANGLE) {
-                dispInc = liveInc;
-            }
-        } else {
-            // Settled — lock anchor point, clamp display to ±0.1° from anchor
-            if (!anchored) {
-                anchorAz = dispAz;
-                anchorInc = dispInc;
-                anchored = true;
-            }
-            // Clamp azimuth to anchor ±0.1° (circular)
-            dispAz = wrapTo360(anchorAz + fmaxf(-0.1f, fminf(0.1f, wrapTo180(liveAz - anchorAz))));
-            // Clamp inclination to anchor ±0.1°
-            float incDiff = liveInc - anchorInc;
-            dispInc = anchorInc + fmaxf(-0.1f, fminf(0.1f, incDiff));
+        // Live update with a small deadband against last-digit flicker.
+        // V1's motion-gated freeze + anchor clamp (which hid the noisy
+        // ISM330DHCX by locking the display to ±0.1° once still) is gone —
+        // the SCA3300/RM3100 EMA output is steady enough to show live, and
+        // the clamp could mask slow re-aims below the motion threshold.
+        if (circularDiff(liveAz, dispAz) > DEADBAND_ANGLE) {
+            dispAz = liveAz;
+        }
+        if (fabsf(liveInc - dispInc) > DEADBAND_ANGLE) {
+            dispInc = liveInc;
         }
 
         display.updateSensorReadings(lastDistance, dispAz, dispInc);
 
-        // Teleplot output
-        Serial.print(F(">azimuth:"));
-        Serial.println(dispAz, 1);
-        Serial.print(F(">inclination:"));
-        Serial.println(dispInc, 1);
+        // Teleplot output ('s' in the serial monitor silences/resumes)
+        if (teleplotEnabled) {
+            Serial.print(F(">azimuth:"));
+            Serial.println(dispAz, 1);
+            Serial.print(F(">inclination:"));
+            Serial.println(dispInc, 1);
+        }
     }
 
     display.updateBattery(lastBatPct);
@@ -1404,7 +1490,6 @@ static void doShutdown() {
     }
     Serial.flush();
     delay(100); // let the LittleFS write settle before cutting the rail
-    buzzer.beep(80);
     if (dispOk) {
         display.blankScreen();
     }
@@ -1413,6 +1498,98 @@ static void doShutdown() {
 
 // Shared power-off hook (declared in config.h) for menu/snake timeout paths
 void systemPowerOff() { doShutdown(); }
+
+// ═══════════════════════════════════════════════════════════════════
+// ── USB Mass Storage Drive Mode (V2: internal-flash FAT partition) ─
+// ═══════════════════════════════════════════════════════════════════
+// Called from setup() right after the MSC interface is registered.
+// LittleFS → FAT staging, then the host owns the volume until MENU is
+// pressed (import + reboot) or the device is powered off (the usb_import
+// flag makes the next boot import instead).
+static void enterUsbDriveMode() {
+    bool fatOk = UsbDrive::mountOrFormat();
+    bool exportOk = fatOk && flashOk && UsbDrive::exportFiles(configMgr);
+
+    // Power-cycle exit must still pick up host edits — flag it before the
+    // host can touch anything.
+    if (flashOk) {
+        configMgr.writeFlag(Flags::USB_IMPORT);
+    }
+    UsbDrive::setHostAccess(true);
+
+    Serial.begin(115200);
+    Serial.println(F("=== USB Drive Mode ==="));
+    if (!fatOk) {
+        Serial.println(F("FAT partition bad — format it (FAT) from the PC"));
+    } else if (!exportOk) {
+        Serial.println(F("WARNING: file staging incomplete"));
+    }
+
+    if (dispOk) {
+        auto &d = display.getDisplay();
+        d.clearDisplay();
+        d.setTextSize(1);
+        d.setTextColor(SH110X_WHITE);
+        d.setCursor(0, 4);
+        d.println(F("USB Drive Mode"));
+        d.println();
+        d.println(F("Edit CONFIG.JSON on"));
+        d.println(F("the MRZAPPY drive."));
+        d.println();
+        d.println(F("Eject, then press"));
+        d.println(F("MENU to save & exit"));
+        d.println(F("(or just power off)."));
+        d.display();
+    }
+
+    // Spin: MENU press exits, power button still powers off cleanly.
+    uint32_t menuLowSince = 0;
+    while (true) {
+        uint32_t now = millis();
+        pollPowerButton(now);
+        if (digitalRead(PIN_BTN_MENU) == LOW) {
+            if (menuLowSince == 0) {
+                menuLowSince = now;
+            } else if (now - menuLowSince >= 50) {
+                break; // debounced MENU press — save & exit
+            }
+        } else {
+            menuLowSince = 0;
+        }
+        delay(10);
+    }
+
+    // Revoke host access and let any in-flight host write drain before this
+    // task touches the volume (MSC callbacks share the flash page cache).
+    UsbDrive::setHostAccess(false);
+    delay(500);
+
+    Serial.println(F("USB drive closed — importing edits"));
+    bool importOk = flashOk && UsbDrive::importFiles(configMgr);
+    if (flashOk) {
+        configMgr.clearFlag(Flags::USB_IMPORT);
+    }
+
+    if (dispOk) {
+        auto &d = display.getDisplay();
+        d.clearDisplay();
+        d.setTextSize(1);
+        d.setTextColor(SH110X_WHITE);
+        d.setCursor(0, 20);
+        if (importOk) {
+            d.println(F("Settings saved."));
+        } else {
+            d.println(F("Some files invalid -"));
+            d.println(F("old data kept."));
+        }
+        d.println();
+        d.println(F("Restarting..."));
+        d.display();
+    }
+    delay(1500);
+    NVIC_SystemReset();
+    // Does not return
+}
 
 
 static void onFlushReading(float az, float inc, float dist) {
@@ -1502,7 +1679,7 @@ static void initLaser() {
     // case only when the laser is truly absent; a healthy module answers fast).
     laserOk = false;
     for (int attempt = 0; attempt < 15 && !laserOk; attempt++) {
-        laserOk = laser.begin(Serial1, buzzer);
+        laserOk = laser.begin(Serial1);
         if (!laserOk) {
             delay(100);
         }
@@ -1529,6 +1706,16 @@ static void initFlash() {
     flashOk = configMgr.begin();
     Serial.print(F("Flash/FS:    "));
     Serial.println(flashOk ? F("OK") : F("FAILED (using defaults)"));
+
+    // Drive mode exited by power-cycle instead of MENU? Import host edits
+    // now, BEFORE loadConfig/initCalibration read the LittleFS copies.
+    if (flashOk && configMgr.hasFlag(Flags::USB_IMPORT)) {
+        configMgr.clearFlag(Flags::USB_IMPORT);
+        Serial.println(F("  ** USB import flag — checking drive for edits"));
+        if (UsbDrive::mountOrFormat()) {
+            UsbDrive::importFiles(configMgr);
+        }
+    }
 
     if (flashOk) {
         if (configMgr.loadConfig(ctx.config)) {

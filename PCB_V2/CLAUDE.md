@@ -38,8 +38,8 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 |------|----|----|
 | BLE | UART bridge to DiscoX (`ble_manager` on SERCOM1) | `src/ble_manager.cpp` wraps `src/drivers/sap6_ble.*` in-process; same `BleCommand` dispatch in `pollBLECommands()`. Connection monitor + Coded-PHY dance live in `BleManager::update()` |
 | Accelerometer | ISM330DHCX (I2C, accel+gyro, m/s²) | SCA3300 (SPI on dedicated `SPIClass(NRF_SPIM2, …)`, MODE_1 ±3 g, reports g → ×9.80665 at the read sites). **No gyro**: motion for the adaptive EMA + display freeze is derived from accel-vs-EMA deviation (`ACCEL_MOTION_THRESHOLD` in main.cpp — tune on hardware) |
-| Laser | Egismos @ 9600 (`laser_egismos`) | Meskernel LDJ-100RED @ 115200: `src/laser_manager.cpp` presents the old `LaserError` surface over `drivers/ldj100`; **beeps go to the on-board piezo** (`drivers/buzzer`), not the laser module. `setBuzzer(true)` = one short blocking beep, `setBuzzer(false)` = no-op |
-| Storage | QSPI flash + FAT (SdFat) + USB-MSC drive mode | **Internal flash + LittleFS** (`InternalFileSystem`). Same file set: `/config.json`, `/calibration.{bin,json}`, `/cal_metrics.bin`, `/pending.txt`, `/flags/*`. USB drive mode is **gone** (no QSPI chip); firmware update still via UF2 bootloader (`enterUf2Dfu()`), storage recovery via menu → Settings → Reformat Storage |
+| Laser | Egismos @ 9600 (`laser_egismos`) | Meskernel LDJ-100RED @ 115200: `src/laser_manager.cpp` presents the old `LaserError` surface over `drivers/ldj100`. Beeps are no longer the laser's job — **all UI sounds live in `src/sounds.cpp`** (per-event vocabulary: shot click, loud 4 kHz reading bleep, rising leg-complete fanfare, falling error womp; power on/off is deliberately silent) over `drivers/buzzer` (`tone` + `sweep` primitives, blocking bit-bang, piezo loudest at its 4 kHz resonance). `LaserManager::setBuzzer(true)` survives as a V1-compat shim (→ `Sounds::click()`) for calibration_mode; `setBuzzer(false)` = no-op |
+| Storage | QSPI flash + FAT (SdFat) + USB-MSC drive mode | **Internal flash + LittleFS** (`InternalFileSystem`). Same file set: `/config.json`, `/calibration.{bin,json}`, `/cal_metrics.bin`, `/pending.txt`, `/flags/*`. USB drive mode is **back** (2026-07-09) via a 128 KB FAT12 partition carved out of internal flash — see "USB drive mode" section. Firmware update still via UF2 bootloader (`enterUf2Dfu()`), storage recovery via menu → Settings → Reformat Storage |
 | Buttons | 5 GPIO buttons | 4 GPIO buttons + hardware power toggle (LTC2954). Enum: `FIRE, UP_DISCO, DOWN, MENU` |
 | Power off | SHUTDOWN button GPIO + LTC2952 PIN_POWER | LTC2954: `pollPowerButton()` watches PB_INT (edge-triggered, 20 ms confirm, boot-hold guard), `doShutdown()` → `power.powerOff()` drives KILL LOW. `systemPowerOff()` (declared in config.h) is the hook for menu/snake timeout paths |
 | RGB LED | NeoPixel + power-gate pin | WS2812 on P0.31, rail hardware-gated by ENA (no power pin) |
@@ -57,6 +57,50 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 Power on/off = the dedicated hardware button into the LTC2954 (H3 pin 4,
 PWR_TOG). Holding it long enough hard-kills via the LTC2954 itself even if
 firmware hangs.
+
+## USB drive mode (settings/calibration/readings on a PC)
+
+Added 2026-07-09, exercised on hardware 2026-07-10 (the first run exposed a
+USB re-enumeration race — `UsbDrive::beginMsc` now forces a detach/attach,
+see the comment there). V1's QSPI USB drive is reproduced on internal
+flash: a **128 KB FAT12 partition** at `0xCD000–0xED000`, exposed over
+TinyUSB MSC as a drive named `MRZAPPY`.
+
+Flash map (see `include/flash_layout.h`, enforced by
+`linker/nrf52840_s140_v6_usbfat.ld` via `board_build.ldscript`):
+
+```
+0x00000-0x26000  SoftDevice S140
+0x26000-0xCD000  application (668 KB cap — LINK FAILS if outgrown; 57.8% used)
+0xCD000-0xED000  FAT12 USB partition (128 KB, survives UF2/DFU flashes)
+0xED000-0xF4000  InternalFS LittleFS (core-fixed)
+0xF4000-…        UF2 bootloader
+```
+
+Design: **LittleFS stays authoritative**; the FAT volume is a staging area
+synced only at explicit points (avoids V1's FAT-as-primary fragility):
+
+- **Entry**: menu → Settings → USB Drive Mode (sets `usb_drive` flag,
+  reboots), or **hold DOWN (B3) at power-on** — the recovery route, needs no
+  flash writes, lets a PC reformat a corrupt partition. On entry the MSC
+  interface is registered before USB enumerates, then LittleFS → FAT staging:
+  `CONFIG.JSON`, `CALIBRATION.JSON`, `READINGS.CSV` (pending legs,
+  export-only), `README.TXT`.
+- **Exit**: eject on the PC, press MENU → validated import → reboot. Plain
+  power-off also works: the `usb_import` flag makes the next boot run the
+  same import before `loadConfig()`/`initCalibration()`.
+- **Import validation**: file must parse as JSON (calibration additionally
+  needs `mag` + `grav` objects); a bad file is rejected and the old LittleFS
+  copy kept. A calibration import also deletes `/calibration.bin` — the
+  binary is preferred at boot and would silently shadow the imported JSON.
+
+Implementation: `src/usb_drive.cpp` + `include/usb_drive.h`;
+FatFs R0.15a vendored in `lib/fatfs` (`ffconf.h`: FAT12 mkfs, LFN, tiny,
+no-RTC). Sector I/O for both FatFs and the MSC callbacks goes through the
+core's SoftDevice-safe `flash_nrf5x` HAL (same one LittleFS uses) — its
+single 4 KB page cache is shared, which is why host access is gated
+(`setHostAccess`) and exit waits 500 ms before importing: MSC callbacks run
+on the USB task and must never interleave with loop-task filesystem writes.
 
 ## Gotchas (inherited + new)
 
@@ -105,25 +149,56 @@ firmware hangs.
   clamping the displayed percentage.
 - WS2812 DIN is on a "low-frequency-only" module pad (P0.31) — watch for RF
   degradation while BLE is active.
+- **Boot-button roles differ**: FIRE held at power-on = serial-debug wait +
+  I2C scan (pre-existing); **DOWN held at power-on = USB drive mode**. Don't
+  reassign either without updating the drive-mode recovery docs.
+- The linker script is project-local (`linker/nrf52840_s140_v6_usbfat.ld`).
+  Removing the `board_build.ldscript` line silently lets the app grow over
+  the FAT partition once it passes 668 KB — keep script, `flash_layout.h`,
+  and `board_upload.maximum_size` in sync.
 
-## ⚠ Commissioning still required (firmware builds, hardware unproven)
+## ⚠ Commissioning still required
 
-1. `MAG_AXES` / `GRAV_AXES` in `include/config.h` are **V1 placeholder
-   values** — the SCA3300 replaces the ISM330DHCX and sensor orientations
-   differ. Determine real mappings from streamed raw data, then run a full
-   on-device calibration (56-pt ellipsoid + 24-pt alignment + F/B check).
-   The embedded `CALIBRATION_JSON` fallback in main.cpp is V1 data.
+1. ~~Determine real `MAG_AXES`/`GRAV_AXES`~~ **done 2026-07-10**: V2
+   mappings measured empirically (mag `+Y-X+Z`, grav `+Y-X-Z`) via raw-axis
+   snapshots in three poses; config.h and the embedded `CALIBRATION_JSON`
+   axes both updated. Still required: full on-device calibration (56-pt
+   ellipsoid + 24-pt alignment + F/B check) — the embedded transform/centre
+   data is still V1's, so `MagErr` and absolute-azimuth error persist until
+   then.
+   **Serial debug commands** (normal mode only — the menu/cal/snake loops
+   short-circuit before the handler): `r` prints one `RAW mag … | acc …`
+   line (chip-frame values before `Axes::fixAxes`, for reading the mapping
+   off known poses); `s` toggles the `>azimuth`/`>inclination` teleplot
+   stream; `c` dumps the stored `/config.json`; `f` resets filter tuning
+   (EMA alphas + stability buffer) to firmware defaults and saves — needed
+   because a stored config.json otherwise shadows new defaults forever.
+   Note the axes strings are ALSO stored inside saved calibrations
+   (`/calibration.{bin,json}`) — they override config.h at load. Boot serial
+   prints `Mag axes:`/`Grav axes:` showing what was actually loaded; if a
+   stale stored calibration shadows the new strings, re-calibrate
+   (`calibration_mode.cpp` constructs from `MAG_AXES`/`GRAV_AXES`) or delete
+   the stored files.
 2. OLED electrically verified on hardware 2026-07-07 (I2C ACK + `begin()`,
    pattern cycle running) — this exposed that the V2 panel is at **0x3C**,
-   not V1's 0x3D, so `SH1107_ADDR` (config.h) was corrected. Still needs a
-   visual by-eye confirm of the image, and the buttons bring-up test is
-   still unrun on hardware (`../PCB_V2 test/` status table).
+   not V1's 0x3D, so `SH1107_ADDR` (config.h) was corrected. Image since
+   confirmed by eye (menus and live readings used throughout the 2026-07-07
+   → 07-10 test passes). The per-IC buttons bring-up test in
+   `../PCB_V2 test/` remains unrun — moot for the production firmware,
+   whose buttons are verified.
 3. Accel motion threshold (`ACCEL_MOTION_THRESHOLD`, main.cpp) and the EMA
    alphas need field tuning — V1 gated these on the gyro, which V2 lacks.
+   First pass done on hardware: `emaAlphaStable` raised 0.05 → 0.15 (the
+   SCA3300/RM3100 pair is much quieter than V1's IMU) and V1's motion-gated
+   display freeze/anchor clamp removed in favour of a plain 0.10° deadband
+   (`updateDisplay`, main.cpp). Confirm underground with real survey legs.
 4. BLE needs a phone run (SexyTopo / nRF Connect): 17-byte legs, ACK/seq
    bit, commands, Coded PHY on Android (iOS = 1 Mbps, normal).
 5. SCA3300 runs in MODE_1 (±3 g) so disco shake detection (11 m/s²) doesn't
    clip; revisit MODE_4 (low noise) if shake detection is retired.
+6. ~~USB drive mode hardware test~~ **done 2026-07-10** — exercised on
+   hardware as part of the full-device test pass (first run needed the
+   re-enumeration fix now in `UsbDrive::beginMsc`).
 
 ## Status
 
@@ -145,7 +220,17 @@ firmware hangs.
   offline path queued the leg to flash (BLE not connected). Measurements may
   report `anomaly: MagErr` — expected, the calibration is still the V1
   placeholder (commissioning item #1), not a firmware fault.
-- Still unexercised on hardware: buzzer beeps (audible), disco animation,
-  calibration/snake UI flows, and the BLE phone link — plus the full
-  commissioning checklist above (real axis mappings + calibration is the
-  big one).
+- 2026-07-09: per-event sound vocabulary added (`src/sounds.cpp`); boot and
+  shutdown chirps were tried and removed — power on/off is silent by choice.
+- 2026-07-09: **USB drive mode added** (128 KB FAT12 partition on internal
+  flash + TinyUSB MSC — see the "USB drive mode" section). Builds clean
+  (RAM 10.4%, flash 57.8% of the new 668 KB app cap).
+- 2026-07-10: **axis mappings determined** (mag `+Y-X+Z`, grav `+Y-X-Z` —
+  commissioning item #1) and the remaining on-device features exercised in a
+  full test pass: buzzer sound vocabulary, disco/WS2812 (the temporary LED
+  self-test in setup() has been removed), snake, USB drive mode, filter
+  retuning (`emaAlphaStable` 0.15, display deadband 0.10° replacing the V1
+  anchor clamp), and the `+` sign on positive inclination.
+- Still outstanding: **full on-device calibration** (embedded transform/
+  centre data is still V1's — `MagErr` persists until then) and the **BLE
+  phone run** (commissioning item #4).

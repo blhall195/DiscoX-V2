@@ -31,6 +31,28 @@ void Buzzer::tone(uint32_t freqHz, uint32_t durationMs) {
     off();
 }
 
+void Buzzer::sweep(uint32_t fromHz, uint32_t toHz, uint32_t durationMs) {
+    if (fromHz == 0 || toHz == 0 || pinA_ == 0xFF) {
+        return;
+    }
+    uint32_t totalUs = durationMs * 1000UL;
+    uint32_t start = micros();
+    bool phase = false;
+    uint32_t elapsed;
+    while ((elapsed = micros() - start) < totalUs) {
+        uint32_t freq = fromHz + (uint32_t)(((int64_t)toHz - (int64_t)fromHz) * elapsed / totalUs);
+        uint32_t halfPeriodUs = 500000UL / freq;
+        if (halfPeriodUs == 0) {
+            halfPeriodUs = 1;
+        }
+        digitalWrite(pinA_, phase ? HIGH : LOW);
+        digitalWrite(pinB_, phase ? LOW : HIGH);
+        phase = !phase;
+        delayMicroseconds(halfPeriodUs);
+    }
+    off();
+}
+
 void Buzzer::off() {
     if (pinA_ == 0xFF) {
         return;

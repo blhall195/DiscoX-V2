@@ -149,7 +149,6 @@ void DisplayManager::showSplash(bool laserOn, const char *nameSuffix) {
     static constexpr int16_t BODY_HW = 40; // half-width
     static constexpr int16_t BODY_HH = 20; // half-height at the sides
     static constexpr int16_t SCOOP = 6;    // how far top/bottom edges dip inward
-    static constexpr int16_t CORNER_R = 8; // visual corner rounding zone
 
     // Given an X position, return the half-height of the body at that X.
     // Two smooth dips with sharp pointed cusps where the curves meet
@@ -303,6 +302,7 @@ void DisplayManager::drawMainScreen() {
 
     // ── Inclination (size 3) ────────────────────────────────────
     _display.setCursor(0, INC_Y);
+    if (_inclination >= 0.0f) _display.print('+');
     _display.print(_inclination, 1);
     drawDegreeSymbol(INC_Y);
 }

@@ -1,4 +1,5 @@
 #include "snake_game.h"
+#include "sounds.h"
 
 // ── Pixel font data (5×7, same bitmaps as Python snake.py) ──────────
 const char SnakeGame::FONT_CHARS[] = "GAMEOVRSC:0123456789 ";
@@ -58,10 +59,14 @@ void SnakeGame::begin(Adafruit_SH1107 &display, ButtonManager &buttons, DiscoMan
     splashDrawn_ = false;
     flashesDone_ = false;
 
-    randomSeed(analogRead(A5) ^ micros());
+    // V1 seeded from floating A5, but on V2 that variant pin IS the WS2812
+    // DIN (P0.31) — a driven output, so it added nothing. micros() alone.
+    randomSeed(micros());
     spawnFood();
     drawInitial();
 
+    greenUntil_ = 0;
+    Sounds::snakeStart();
     lastMove_ = millis();
 
     Serial.println(F("SNAKE GAME"));
@@ -105,6 +110,9 @@ bool SnakeGame::update() {
                     disco_->setRed();
                     flashOn_ = true;
                     lastFlash_ = now;
+                    // Falling womp per flash (blocking ~220 ms — the LED
+                    // stays red underneath it, so flash timing holds).
+                    Sounds::snakeCrash(flashCount_);
                 }
             }
             return false;
@@ -144,7 +152,9 @@ bool SnakeGame::update() {
 
         if (justAte_) {
             disco_->setGreen();
-        } else {
+            greenUntil_ = now + ATE_GLOW_MS;
+            Sounds::snakeEat(score_);
+        } else if (now >= greenUntil_) {
             disco_->turnOff();
         }
     }

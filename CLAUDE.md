@@ -8,10 +8,10 @@ The board has been redesigned around a single Raytac MDBT50Q-U1MV2 (nRF52840)
 module that replaces both V1 MCUs. Two folders:
 
 - **`PCB_V2/`** — the merged production firmware (V1 main board + DiscoX BLE
-  ported in-process; the UART bridge is gone). Runs on hardware as of
-  2026-07-07: sensor fusion, buttons, laser measurement, and menu all
-  verified live; commissioning still pending (real axis mappings + full
-  calibration, BLE phone test). **Read `PCB_V2/CLAUDE.md` first when working
+  ported in-process; the UART bridge is gone). Running verified on hardware
+  as of 2026-07-10: sensor fusion, buttons, laser measurement, menu, sounds,
+  disco, USB drive mode; commissioning still pending (full calibration,
+  BLE phone test). **Read `PCB_V2/CLAUDE.md` first when working
   on V2** — build/flash instructions (`pio run -t upload` from `PCB_V2/`,
   USB DFU, VID 239A), V1→V2 seam table, button roles, gotchas,
   commissioning checklist.
@@ -64,8 +64,9 @@ Same math in V1 and V2. Ported from Python; uses Eigen for linear algebra.
   solved via least-squares, back-projected to adjust `mag.centre_`. Menu → Enter Calibration →
   Field Check (F/B).
 
-Note: V2 axis mappings (`MAG_AXES`/`GRAV_AXES`) are **unconfirmed placeholders** — V1 values
-(`mag "-X-Y-Z"`, accel `"-Y-X+Z"`) are embedded as fallback but SCA3300 orientation differs.
+Note: V2 axis mappings determined empirically 2026-07-10 (mag `"+Y-X+Z"`, accel `"+Y-X-Z"` —
+raw-axis snapshots in three poses, see `PCB_V2/CLAUDE.md`); full on-device V2 calibration is
+still pending, so the embedded V1 transform/centre data remains only roughly valid.
 
 ## SAP6 BLE GATT Protocol
 
@@ -86,7 +87,15 @@ Same in V1 and V2 (V1 implemented in `V1/DiscoX C++ BLE/`, V2 in-process in `PCB
   corrected from V1's 0x3D), buttons, laser measurement, and menu all
   verified on the board. Measurements flag `anomaly: MagErr` because the
   calibration is still V1 placeholder data — expected, not a fault.
-- V2 commissioning still pending: real `MAG_AXES`/`GRAV_AXES` + full
-  on-device calibration, accel motion-threshold tuning, buzzer/disco/
-  calibration-UI exercises, BLE phone test
-  (see `PCB_V2/CLAUDE.md` checklist and `PCB_V2 test/CLAUDE.md` status table)
+- 2026-07-09: V1's USB settings drive is back on V2 — a 128 KB FAT12
+  partition carved from the nRF52840's internal flash, exposed over USB MSC
+  (menu → Settings → USB Drive Mode, or hold DOWN at power-on). Settings,
+  calibration, and unsent readings appear as editable files; LittleFS stays
+  the authoritative store. Details in `PCB_V2/CLAUDE.md` → "USB drive mode".
+- 2026-07-10: axis mappings determined (`MAG_AXES`/`GRAV_AXES`) and the
+  remaining on-device features exercised in a full test pass — buzzer
+  sounds, disco, snake, USB drive mode, filter retuning.
+- V2 commissioning still pending: full on-device calibration (embedded
+  transform/centre data is still V1's, so `MagErr` persists) and the BLE
+  phone test (see `PCB_V2/CLAUDE.md` checklist and `PCB_V2 test/CLAUDE.md`
+  status table)

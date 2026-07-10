@@ -201,6 +201,7 @@ void MenuManager::buildMenu() {
     _settingsSub.addSubmenu(_brightnessLabel, &_brightnessSub);
     _settingsSub.addSubmenu(_cartesianLabel, &_cartesianSub);
     _settingsSub.addAction(_splaysLabel, toggleSplays);
+    _settingsSub.addAction("USB Drive Mode", enterUsbDrive);
     // (V2: no "Edit Settings File" — there is no USB drive on internal flash)
     _settingsSub.addSubmenu("Reformat Storage", &_reformatSub);
     _settingsSub.addAction("<- Back", goToRoot);
@@ -328,6 +329,15 @@ void MenuManager::enterBootloader(int) {
     Serial.println(F("Menu: entering bootloader for firmware update"));
     s_instance->_active = false;
     s_instance->_exitAction = MenuExitAction::ENTER_BOOTLOADER;
+}
+
+void MenuManager::enterUsbDrive(int) {
+    if (!s_instance) {
+        return;
+    }
+    Serial.println(F("Menu: entering USB drive mode (settings on PC)"));
+    s_instance->_active = false;
+    s_instance->_exitAction = MenuExitAction::ENTER_USB_DRIVE;
 }
 
 void MenuManager::reformatFlash(int) {

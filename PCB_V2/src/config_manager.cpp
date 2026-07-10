@@ -99,6 +99,24 @@ bool ConfigManager::reformat() {
 
 // ── Settings persistence ───────────────────────────────────────────
 
+bool ConfigManager::printConfig(Stream &out) {
+    if (!mounted_) {
+        return false;
+    }
+    File file(InternalFS);
+    if (!file.open("/config.json", FILE_O_READ)) {
+        return false;
+    }
+    char buf[64];
+    int len;
+    while ((len = file.read(buf, sizeof(buf))) > 0) {
+        out.write(reinterpret_cast<const uint8_t *>(buf), len);
+    }
+    file.close();
+    out.println();
+    return true;
+}
+
 bool ConfigManager::loadConfig(Config &cfg) {
     if (!mounted_) {
         return false;
@@ -207,6 +225,14 @@ bool ConfigManager::saveConfig(const Config &cfg) {
     return writeFileAtomic("/config.json", "/cfg_tmp.json", reinterpret_cast<const uint8_t *>(buf), len);
 }
 
+bool ConfigManager::saveConfigJsonRaw(const char *json, size_t len) {
+    if (!mounted_) {
+        return false;
+    }
+    return writeFileAtomic("/config.json", "/cfg_tmp.json", reinterpret_cast<const uint8_t *>(json),
+                           len);
+}
+
 // ── Calibration data ───────────────────────────────────────────────
 
 bool ConfigManager::loadCalibrationJson(char *buf, size_t bufSize, size_t &bytesRead) {
@@ -270,6 +296,16 @@ bool ConfigManager::saveCalibrationBinary(const MagCal::CalibrationBinary &data)
     }
     return writeFileAtomic("/calibration.bin", "/cal_tmp.bin", reinterpret_cast<const uint8_t *>(&data),
                            sizeof(data));
+}
+
+bool ConfigManager::removeCalibrationBinary() {
+    if (!mounted_) {
+        return false;
+    }
+    if (!InternalFS.exists("/calibration.bin")) {
+        return true;
+    }
+    return InternalFS.remove("/calibration.bin");
 }
 
 // ── Calibration quality metrics ─────────────────────────────────────

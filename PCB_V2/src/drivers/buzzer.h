@@ -20,6 +20,11 @@ class Buzzer {
     // Blocking antiphase square wave at freqHz for durationMs, then silent.
     void tone(uint32_t freqHz, uint32_t durationMs);
 
+    // Blocking glissando: linearly slides from fromHz to toHz over durationMs.
+    // Rising sweeps read as "happy/on", falling as "sad/off" — much more
+    // expressive on a piezo than fixed-pitch beeps.
+    void sweep(uint32_t fromHz, uint32_t toHz, uint32_t durationMs);
+
     // Convenience: a beep at the element's resonant frequency.
     void beep(uint32_t durationMs) { tone(RESONANT_HZ, durationMs); }
 

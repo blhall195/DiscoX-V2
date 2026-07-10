@@ -10,7 +10,8 @@ constexpr bool anomalyDetection = true;
 constexpr float stabilityTolerance = 0.5f;    // degrees
 constexpr float quickShotStabilityTol = 8.0f; // degrees (wider for splay shots)
 constexpr uint8_t stabilityBufferLength = 5;
-constexpr float emaAlphaStable = 0.05f;         // low alpha when stationary (max smoothing)
+constexpr float emaAlphaStable = 0.15f;         // stationary alpha — lightened for the low-noise
+                                                // SCA3300/RM3100 (V1's noisy IMU needed 0.05)
 constexpr float emaAlphaMoving = 0.6f;          // high alpha when moving (responsive)
 constexpr float emaJumpThreshold = 8.0f;        // degrees — snap EMA when error exceeds this
 constexpr float legAngleTolerance = 1.7f;       // degrees
@@ -19,10 +20,6 @@ constexpr float cartesianToleranceMin = 1.0f;   // cm
 constexpr float cartesianToleranceMax = 200.0f; // cm
 constexpr float laserDistanceOffset = 0.162f;   // meters added when measuring from back
 constexpr float laserFrontOffset = 0.03f;       // meters subtracted when measuring from front
-constexpr float gyroFreezeThreshold = 0.02f;    // rad/s — below this gyro magnitude, display freezes
-constexpr float gyroMovingThreshold =
-    0.05f;                                 // rad/s — above this, EMA uses fast alpha (hand tremor ~0.03-0.05)
-constexpr uint16_t gyroSettleMs = 1500;    // ms to keep updating after gyro goes still (EMA settle)
 constexpr float calMagConsistency = 0.5f;  // degrees (angular consistency window for mag)
 constexpr float calGravConsistency = 0.4f; // degrees (angular consistency window for gravity)
 constexpr uint8_t calBufferLength = 5;     // samples for calibration consistency window

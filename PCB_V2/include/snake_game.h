@@ -27,6 +27,7 @@ class SnakeGame {
     static constexpr uint8_t GRID_W = 16;
     static constexpr uint8_t GRID_H = 16;
     static constexpr uint16_t MOVE_MS = 200;
+    static constexpr uint16_t ATE_GLOW_MS = 600; // green LED hold after eating
     static constexpr uint16_t FLASH_MS = 300;
     static constexpr uint16_t GAP_MS = 200;
     static constexpr uint8_t FLASHES = 3;
@@ -61,6 +62,7 @@ class SnakeGame {
 
     // ── Timing ──────────────────────────────────────────────────────
     uint32_t lastMove_ = 0;
+    uint32_t greenUntil_ = 0; // LED glows green until this time after eating
     uint32_t gameOverTime_ = 0;
 
     // Game-over animation state

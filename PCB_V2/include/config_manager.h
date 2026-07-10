@@ -12,6 +12,8 @@ namespace Flags {
 constexpr const char *CALIBRATION = "calibration";
 constexpr const char *MENU = "menu";
 constexpr const char *SNAKE = "snake";
+constexpr const char *USB_DRIVE = "usb_drive";   // reboot into USB drive mode
+constexpr const char *USB_IMPORT = "usb_import"; // FAT files may have host edits — import at boot
 } // namespace Flags
 
 // V2: persistence lives on the nRF52840's internal flash via LittleFS
@@ -42,6 +44,13 @@ class ConfigManager {
     // Save config to /config.json. Returns false on write failure.
     bool saveConfig(const Config &cfg);
 
+    // Write caller-provided JSON text straight to /config.json (atomic).
+    // Used by the USB-drive import — caller must have validated the JSON.
+    bool saveConfigJsonRaw(const char *json, size_t len);
+
+    // Print the stored /config.json verbatim to a stream (debug/commissioning).
+    bool printConfig(Stream &out);
+
     // ── Calibration data ────────────────────────────────────────────
 
     // Load calibration JSON into caller-provided buffer.
@@ -56,6 +65,10 @@ class ConfigManager {
 
     // Save calibration binary to /calibration.bin.
     bool saveCalibrationBinary(const MagCal::CalibrationBinary &data);
+
+    // Delete /calibration.bin. The boot loader prefers binary over JSON, so
+    // a USB-drive JSON import must remove the stale binary to take effect.
+    bool removeCalibrationBinary();
 
     // ── Calibration quality metrics ───────────────────────────────────
 
