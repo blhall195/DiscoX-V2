@@ -64,7 +64,8 @@ ButtonManager buttons;
 RM3100 mag;
 // SCA3300 needs its own SPI master: SPIM3 is the core's default `SPI`,
 // SPIM0/1 overlap the TWI/UART peripherals — SPIM2 is the free one.
-static SPIClass accelSpi(NRF_SPIM2, PIN_SCA3300_MISO, PIN_SCA3300_SCK, PIN_SCA3300_MOSI);
+static SPIClass accelSpi(NRF_SPIM2, PIN_SCA3300_MISO, PIN_SCA3300_SCK,
+                         PIN_SCA3300_MOSI);
 SCA3300 accel;
 MAX17048_Persistent battery;
 DisplayManager display;
@@ -112,8 +113,10 @@ static bool teleplotEnabled = true;
 static float accEmaX = 0, accEmaY = 0, accEmaZ = 0;
 static bool accEmaSeeded = false;
 static bool deviceMoving = false;
-static constexpr float ACCEL_MOTION_EMA_ALPHA = 0.2f;    // smoothing for the reference vector
-static constexpr float ACCEL_MOTION_THRESHOLD = 0.35f;   // m/s² deviation = "moving"
+static constexpr float ACCEL_MOTION_EMA_ALPHA =
+    0.2f; // smoothing for the reference vector
+static constexpr float ACCEL_MOTION_THRESHOLD =
+    0.35f; // m/s² deviation = "moving"
 
 static float lastDistance = 0;
 
@@ -126,8 +129,8 @@ static uint8_t fieldCheckCounter = 0;
 static bool fieldCheckDone = false;
 
 // ── Display deadband (prevents ±0.1 flicker when stationary) ────────
-static float dispAz = 0.0f;                    // currently displayed azimuth
-static float dispInc = 0.0f;                   // currently displayed inclination
+static float dispAz = 0.0f;  // currently displayed azimuth
+static float dispInc = 0.0f; // currently displayed inclination
 static constexpr float DEADBAND_ANGLE = 0.10f; // degrees
 
 // ── Timing statics ──────────────────────────────────────────────────
@@ -155,8 +158,9 @@ static bool lastBleConnected = false;
 // INT pulses LOW (<1 s) per press — edge-triggered with a 20 ms confirm.
 // Boot-hold guard: arm only after INT has first been seen HIGH, so the
 // power-ON press can't immediately power the board back off.
-static bool pwrBtnArmed = false;      // set once INT first reads HIGH
-static uint32_t pwrBtnLowSince = 0;   // millis() when INT first read LOW (0 = idle)
+static bool pwrBtnArmed = false; // set once INT first reads HIGH
+static uint32_t pwrBtnLowSince =
+    0; // millis() when INT first read LOW (0 = idle)
 
 // ── Forward declarations — init ────────────────────────────────────
 static void initPins();
@@ -186,481 +190,486 @@ static void handleMeasurementSuccess();
 static void alertError(const char *errCode);
 static void resetLaser();
 static void doShutdown();
-static void enterUsbDriveMode(); // modal USB MSC settings drive — reboots on exit
+static void
+enterUsbDriveMode(); // modal USB MSC settings drive — reboots on exit
 static void onFlushReading(float az, float inc, float dist);
 
 const bool REGULAR_SHOT = false;
 const bool QUICK_SHOT = true;
 
 void laserOn() {
-    if (!laserOk) {
-        return;
-    }
-    laser.setLaser(true);
-    ctx.laserEnabled = true;
+  if (!laserOk) {
+    return;
+  }
+  laser.setLaser(true);
+  ctx.laserEnabled = true;
 }
 
 void laserOff() {
-    if (!laserOk) {
-        return;
-    }
-    laser.setLaser(false);
-    ctx.laserEnabled = false;
+  if (!laserOk) {
+    return;
+  }
+  laser.setLaser(false);
+  ctx.laserEnabled = false;
 }
-
 
 // ═══════════════════════════════════════════════════════════════════
 // ── Setup ─────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 void setup() {
-    // Power controller first: KILL stays high-Z so nothing can cut the rail,
-    // INT/PGOOD become inputs. (The power-on button press is still in flight —
-    // the boot-hold guard in pollPowerButton keeps it from powering us off.)
-    power.begin(PIN_KILL, PIN_PB_INT, PIN_PGOOD);
-    buzzer.begin(PIN_BUZZER_A, PIN_BUZZER_B);
-    Sounds::begin(buzzer);
+  // Power controller first: KILL stays high-Z so nothing can cut the rail,
+  // INT/PGOOD become inputs. (The power-on button press is still in flight —
+  // the boot-hold guard in pollPowerButton keeps it from powering us off.)
+  power.begin(PIN_KILL, PIN_PB_INT, PIN_PGOOD);
+  buzzer.begin(PIN_BUZZER_A, PIN_BUZZER_B);
+  Sounds::begin(buzzer);
 
-    // Init laser so it can be turned off immediately (rail is ENA-gated and
-    // already up; the LDJ-100 boots with the diode off, so this is belt+braces).
-    initLaser();
+  // Init laser so it can be turned off immediately (rail is ENA-gated and
+  // already up; the LDJ-100 boots with the diode off, so this is belt+braces).
+  initLaser();
 
-    // Get display up ASAP — before serial, which can block on USB enumeration.
-    // V2 I2C pins are NOT the variant defaults — must be routed before begin().
-    Wire.setPins(PIN_I2C_SDA, PIN_I2C_SCL);
-    Wire.begin();
-    Wire.setClock(400000);
-    initDisplay();
+  // Get display up ASAP — before serial, which can block on USB enumeration.
+  // V2 I2C pins are NOT the variant defaults — must be routed before begin().
+  Wire.setPins(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.begin();
+  Wire.setClock(400000);
+  initDisplay();
 
-    // Configure button pull-ups BEFORE reading them
-    pinMode(PIN_BTN_FIRE, INPUT_PULLUP);
-    pinMode(PIN_BTN_MENU, INPUT_PULLUP);
-    pinMode(PIN_BTN_DOWN, INPUT_PULLUP);
-    delayMicroseconds(50); // let pull-ups settle before reading
+  // Configure button pull-ups BEFORE reading them
+  pinMode(PIN_BTN_FIRE, INPUT_PULLUP);
+  pinMode(PIN_BTN_MENU, INPUT_PULLUP);
+  pinMode(PIN_BTN_DOWN, INPUT_PULLUP);
+  delayMicroseconds(50); // let pull-ups settle before reading
 
-    // ── Early USB drive mode check ─────────────────────────────────
-    // Must happen BEFORE any Serial use so the MSC interface is part of
-    // the initial USB enumeration. Entered by EITHER the usb_drive flag
-    // (set from the menu) OR by holding DOWN (B3) at power-on. The button
-    // path needs no flash read/write, so it still works when LittleFS is
-    // broken — it's the recovery route to reformat the partition from a PC.
-    // (FIRE-at-boot is taken by the serial-debug hold below, hence DOWN.)
-    {
-        flashOk = configMgr.begin(); // idempotent — initFlash() re-checks later
-        bool usbByFlag = flashOk && configMgr.hasFlag(Flags::USB_DRIVE);
-        bool usbByButton = (digitalRead(PIN_BTN_DOWN) == LOW);
-        if (usbByFlag || usbByButton) {
-            if (usbByFlag) {
-                configMgr.clearFlag(Flags::USB_DRIVE);
-            }
-            UsbDrive::beginMsc(); // register MSC BEFORE the host enumerates
-            enterUsbDriveMode();  // modal — reboots or powers off, never returns
-        }
+  // ── Early USB drive mode check ─────────────────────────────────
+  // Must happen BEFORE any Serial use so the MSC interface is part of
+  // the initial USB enumeration. Entered by EITHER the usb_drive flag
+  // (set from the menu) OR by holding DOWN (B3) at power-on. The button
+  // path needs no flash read/write, so it still works when LittleFS is
+  // broken — it's the recovery route to reformat the partition from a PC.
+  // (FIRE-at-boot is taken by the serial-debug hold below, hence DOWN.)
+  {
+    flashOk = configMgr.begin(); // idempotent — initFlash() re-checks later
+    bool usbByFlag = flashOk && configMgr.hasFlag(Flags::USB_DRIVE);
+    bool usbByButton = (digitalRead(PIN_BTN_DOWN) == LOW);
+    if (usbByFlag || usbByButton) {
+      if (usbByFlag) {
+        configMgr.clearFlag(Flags::USB_DRIVE);
+      }
+      UsbDrive::beginMsc(); // register MSC BEFORE the host enumerates
+      enterUsbDriveMode();  // modal — reboots or powers off, never returns
     }
+  }
 
-    // Normal boot — show splash screen
-    uint32_t splashStart = millis();
-    display.showSplash(false);
+  // Normal boot — show splash screen
+  uint32_t splashStart = millis();
+  display.showSplash(false);
 
-    Serial.begin(115200);
-    if (digitalRead(PIN_BTN_FIRE) == LOW) { // hold FIRE for serial debug
-        while (!Serial && millis() < 3000) {
-        }
-        Serial.println(F("I2C bus scan:"));
-        scanI2C();
-        Serial.println();
+  Serial.begin(115200);
+  if (digitalRead(PIN_BTN_FIRE) == LOW) { // hold FIRE for serial debug
+    while (!Serial && millis() < 3000) {
     }
-
-    Serial.println(F("=== Mr_Zappy PCB V2 ==="));
-    Serial.println(F("Merged single-MCU firmware"));
+    Serial.println(F("I2C bus scan:"));
+    scanI2C();
     Serial.println();
+  }
 
-    initPins();
-    buttons.begin();
+  Serial.println(F("=== Mr_Zappy PCB V2 ==="));
+  Serial.println(F("Merged single-MCU firmware"));
+  Serial.println();
 
-    // ── Sensors ──
-    magOk = mag.begin(Wire, RM3100_I2C_ADDR, RM3100_CYCLE_COUNT, PIN_MAG_DRDY);
-    if (magOk) {
-        mag.startSingleReading(); // kick off first non-blocking read
+  initPins();
+  buttons.begin();
+
+  // ── Sensors ──
+  magOk = mag.begin(Wire, RM3100_I2C_ADDR, RM3100_CYCLE_COUNT, PIN_MAG_DRDY);
+  if (magOk) {
+    mag.startSingleReading(); // kick off first non-blocking read
+  }
+  Serial.print(F("RM3100:      "));
+  Serial.println(magOk ? F("OK") : F("FAILED"));
+
+  // MODE_1 (±3 g, 70 Hz LPF): closest dynamics to V1's 4G/104Hz setup, and
+  // ±1.5 g modes would clip during disco shake detection (11 m/s² threshold)
+  accelOk = accel.begin(accelSpi, PIN_SCA3300_CS, SCA3300::Mode::MODE_1);
+  Serial.print(F("SCA3300:     "));
+  Serial.println(accelOk ? F("OK") : F("FAILED"));
+
+  batOk = battery.begin(&Wire);
+  if (batOk) {
+    delay(100); // let SOC register update after wake
+    lastBatPct = battery.cellPercent();
+    lastBatRead = millis();
+  }
+  Serial.print(F("MAX17048:    "));
+  Serial.println(batOk ? F("OK") : F("FAILED"));
+  if (batOk) {
+    Serial.print(F("  Voltage:   "));
+    Serial.print(battery.cellVoltage(), 3);
+    Serial.println(F(" V"));
+    Serial.print(F("  SOC:       "));
+    Serial.print(lastBatPct, 1);
+    Serial.println(F(" %"));
+    Serial.print(F("  Hibernate: "));
+    Serial.println(battery.isHibernating() ? F("yes") : F("no"));
+  }
+  Serial.println();
+
+  // Flash/config BEFORE BLE — the advertised name comes from config.json
+  initFlash();
+  initBle();
+
+  // Warn user if flash was auto-reformatted (all saved data lost)
+  if (flashOk && configMgr.wasReformatted() && dispOk) {
+    auto &disp = display.getDisplay();
+    display.blankScreen();
+    disp.setTextColor(SH110X_WHITE);
+    disp.setTextSize(2);
+    disp.setCursor(0, 10);
+    disp.println(F("FLASH"));
+    disp.println(F("RECOVERED"));
+    disp.setTextSize(1);
+    disp.println();
+    disp.println(F("Storage was corrupt."));
+    disp.println(F("Reformatted OK."));
+    disp.println();
+    disp.println(F("Calibration &"));
+    disp.println(F("settings were lost."));
+    disp.display();
+    delay(5000);
+  }
+
+  initCalibration();
+  initDisco();
+
+  // ── Splash sequence: off(200) → on(300) → off(200) → on(750) = 1450ms
+  {
+    auto splashLaser = [&]() -> bool {
+      uint32_t t = millis() - splashStart;
+      if (t < 200) {
+        return false; // off  200ms
+      }
+      if (t < 500) {
+        return true; // on   300ms
+      }
+      if (t < 700) {
+        return false; // off  200ms
+      }
+      return true; // on   750ms (final hold)
+    };
+    // Extract suffix after '_' from BLE name for splash display
+    const char *nameSuffix = strchr(ctx.config.bleName, '_');
+    if (nameSuffix) {
+      nameSuffix++; // skip the '_'
     }
-    Serial.print(F("RM3100:      "));
-    Serial.println(magOk ? F("OK") : F("FAILED"));
 
-    // MODE_1 (±3 g, 70 Hz LPF): closest dynamics to V1's 4G/104Hz setup, and
-    // ±1.5 g modes would clip during disco shake detection (11 m/s² threshold)
-    accelOk = accel.begin(accelSpi, PIN_SCA3300_CS, SCA3300::Mode::MODE_1);
-    Serial.print(F("SCA3300:     "));
-    Serial.println(accelOk ? F("OK") : F("FAILED"));
-
-    batOk = battery.begin(&Wire);
-    if (batOk) {
-        delay(100); // let SOC register update after wake
-        lastBatPct = battery.cellPercent();
-        lastBatRead = millis();
+    while (millis() - splashStart < 1450) {
+      display.showSplash(splashLaser(), nameSuffix);
     }
-    Serial.print(F("MAX17048:    "));
-    Serial.println(batOk ? F("OK") : F("FAILED"));
-    if (batOk) {
-        Serial.print(F("  Voltage:   "));
-        Serial.print(battery.cellVoltage(), 3);
-        Serial.println(F(" V"));
-        Serial.print(F("  SOC:       "));
-        Serial.print(lastBatPct, 1);
-        Serial.println(F(" %"));
-        Serial.print(F("  Hibernate: "));
-        Serial.println(battery.isHibernating() ? F("yes") : F("no"));
-    }
-    Serial.println();
+  }
 
-    // Flash/config BEFORE BLE — the advertised name comes from config.json
-    initFlash();
-    initBle();
+  // ── Switch display from splash to main screen ────────────────
+  if (dispOk) {
+    display.updateBattery(lastBatPct);
+    display.updateMeasureFrom(ctx.config.measureFromFront);
+    display.initScreen();
+  }
 
-    // Warn user if flash was auto-reformatted (all saved data lost)
-    if (flashOk && configMgr.wasReformatted() && dispOk) {
-        auto &disp = display.getDisplay();
-        display.blankScreen();
-        disp.setTextColor(SH110X_WHITE);
-        disp.setTextSize(2);
-        disp.setCursor(0, 10);
-        disp.println(F("FLASH"));
-        disp.println(F("RECOVERED"));
-        disp.setTextSize(1);
-        disp.println();
-        disp.println(F("Storage was corrupt."));
-        disp.println(F("Reformatted OK."));
-        disp.println();
-        disp.println(F("Calibration &"));
-        disp.println(F("settings were lost."));
-        disp.display();
-        delay(5000);
-    }
-
-    initCalibration();
-    initDisco();
-
-    // ── Splash sequence: off(200) → on(300) → off(200) → on(750) = 1450ms
-    {
-        auto splashLaser = [&]() -> bool {
-            uint32_t t = millis() - splashStart;
-            if (t < 200) {
-                return false; // off  200ms
-            }
-            if (t < 500) {
-                return true; // on   300ms
-            }
-            if (t < 700) {
-                return false; // off  200ms
-            }
-            return true; // on   750ms (final hold)
-        };
-        // Extract suffix after '_' from BLE name for splash display
-        const char *nameSuffix = strchr(ctx.config.bleName, '_');
-        if (nameSuffix) {
-            nameSuffix++; // skip the '_'
-        }
-
-        while (millis() - splashStart < 1450) {
-            display.showSplash(splashLaser(), nameSuffix);
-        }
-    }
-
-    // ── Switch display from splash to main screen ────────────────
+  // ── Low battery check on boot ────────────────────────────────
+  // Skip if 0% — that means no LiPo connected (USB-only power)
+  if (batOk && lastBatPct > 0.5f &&
+      lastBatPct <= Timing::BATTERY_SHUTDOWN_PCT) {
+    Serial.println(F("LOW BATTERY — shutting down"));
     if (dispOk) {
-        display.updateBattery(lastBatPct);
-        display.updateMeasureFrom(ctx.config.measureFromFront);
-        display.initScreen();
+      display.updateDistanceText("LOW");
+      display.updateAzimuth(0);
+      display.updateInclination(0);
+      display.refresh();
     }
+    disco.setRed();
+    delay(3000);
+    doShutdown();
+  }
 
+  // ── Pending readings display ─────────────────────────────────
+  if (dispOk) {
+    display.updateBTNumber(ctx.bleDisconnectionCounter);
+  }
 
-    // ── Low battery check on boot ────────────────────────────────
-    // Skip if 0% — that means no LiPo connected (USB-only power)
-    if (batOk && lastBatPct > 0.5f && lastBatPct <= Timing::BATTERY_SHUTDOWN_PCT) {
-        Serial.println(F("LOW BATTERY — shutting down"));
-        if (dispOk) {
-            display.updateDistanceText("LOW");
-            display.updateAzimuth(0);
-            display.updateInclination(0);
-            display.refresh();
-        }
-        disco.setRed();
-        delay(3000);
-        doShutdown();
+  // ── Check for boot mode overrides ────────────────────────────
+  buttons.update();
+  if (buttons.isPressed(Button::MENU)) {
+    Serial.println(F("MENU held at boot — entering menu mode"));
+    enterMenuMode = true;
+  }
+
+  // Enter menu mode if flag was set or MENU held
+  if (enterMenuMode && dispOk) {
+    display.showStartingMenu();
+    delay(500);
+    menuMgr.begin(display.getDisplay(), ctx, configMgr);
+  }
+
+  // Enter calibration mode if flag was set
+  if (enterCalibMode && magOk && accelOk && dispOk && laserOk) {
+    calMode.begin(buttons, display, disco, laser, mag, accel, configMgr,
+                  calibration, ctx.config);
+  }
+
+  // Enter snake mode if flag was set
+  if (enterSnakeMode && dispOk) {
+    if (laserOk) {
+      laser.setLaser(false);
     }
+    snakeGame.begin(display.getDisplay(), buttons, disco);
+  }
 
-    // ── Pending readings display ─────────────────────────────────
-    if (dispOk) {
-        display.updateBTNumber(ctx.bleDisconnectionCounter);
-    }
+  ctx.lastActivityTime = millis();
 
-    // ── Check for boot mode overrides ────────────────────────────
-    buttons.update();
-    if (buttons.isPressed(Button::MENU)) {
-        Serial.println(F("MENU held at boot — entering menu mode"));
-        enterMenuMode = true;
-    }
-
-    // Enter menu mode if flag was set or MENU held
-    if (enterMenuMode && dispOk) {
-        display.showStartingMenu();
-        delay(500);
-        menuMgr.begin(display.getDisplay(), ctx, configMgr);
-    }
-
-    // Enter calibration mode if flag was set
-    if (enterCalibMode && magOk && accelOk && dispOk && laserOk) {
-        calMode.begin(buttons, display, disco, laser, mag, accel, configMgr, calibration, ctx.config);
-    }
-
-    // Enter snake mode if flag was set
-    if (enterSnakeMode && dispOk) {
-        if (laserOk) {
-            laser.setLaser(false);
-        }
-        snakeGame.begin(display.getDisplay(), buttons, disco);
-    }
-
-    ctx.lastActivityTime = millis();
-
-    if (snakeGame.isActive()) {
-        Serial.println(F("Running. Snake mode."));
-    } else if (calMode.isActive()) {
-        Serial.println(F("Running. Calibration mode."));
-    } else if (menuMgr.isActive()) {
-        Serial.println(F("Running. Menu mode."));
-    } else {
-        Serial.println(F("Running. Normal mode."));
-    }
-    Serial.println();
+  if (snakeGame.isActive()) {
+    Serial.println(F("Running. Snake mode."));
+  } else if (calMode.isActive()) {
+    Serial.println(F("Running. Calibration mode."));
+  } else if (menuMgr.isActive()) {
+    Serial.println(F("Running. Menu mode."));
+  } else {
+    Serial.println(F("Running. Normal mode."));
+  }
+  Serial.println();
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // ── Main Loop ─────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 void loop() {
-    uint32_t now = millis();
+  uint32_t now = millis();
 
-    // Hardware power button (LTC2954 INT) — works in all modes
-    // (normal, menu, cal, snake). Confirmed press → clean shutdown.
-    pollPowerButton(now);
+  // Hardware power button (LTC2954 INT) — works in all modes
+  // (normal, menu, cal, snake). Confirmed press → clean shutdown.
+  pollPowerButton(now);
 
-    buttons.update();
+  buttons.update();
 
-    // ── Snake mode: SnakeGame owns the loop ──
-    if (snakeGame.isActive()) {
-        if (snakeGame.update()) {
-            // Game finished — return to normal operation
-            Serial.println(F("Snake game ended — returning to normal mode"));
-            disco.turnOff();
-            display.initScreen();
-            ctx.laserEnabled = false;
-            ctx.lastActivityTime = millis();
-        }
-        delay(Timing::LOOP_INTERVAL_MS);
-        return;
+  // ── Snake mode: SnakeGame owns the loop ──
+  if (snakeGame.isActive()) {
+    if (snakeGame.update()) {
+      // Game finished — return to normal operation
+      Serial.println(F("Snake game ended — returning to normal mode"));
+      disco.turnOff();
+      display.initScreen();
+      ctx.laserEnabled = false;
+      ctx.lastActivityTime = millis();
     }
-
-    // ── Menu mode: hand off to MenuManager, skip everything else ──
-    if (menuMgr.isActive()) {
-        menuMgr.update(buttons);
-        delay(Timing::LOOP_INTERVAL_MS);
-        return;
-    }
-
-    // ── Handle menu exit transitions (one-shot) ──
-    if (menuMgr.exitAction() == MenuExitAction::ENTER_PART1_CALIB ||
-        menuMgr.exitAction() == MenuExitAction::ENTER_PART2_CALIB ||
-        menuMgr.exitAction() == MenuExitAction::ENTER_SHORT_CALIB) {
-        CalMode cm = CalMode::PART1_ELLIPSOID;
-        if (menuMgr.exitAction() == MenuExitAction::ENTER_PART2_CALIB) {
-            cm = CalMode::PART2_ALIGNMENT;
-        } else if (menuMgr.exitAction() == MenuExitAction::ENTER_SHORT_CALIB) {
-            cm = CalMode::SHORT;
-        }
-        menuMgr.clearExitAction();
-        if (magOk && accelOk && dispOk && laserOk) {
-            Serial.println(F("Transitioning: menu → calibration"));
-            calMode.begin(buttons, display, disco, laser, mag, accel, configMgr, calibration, ctx.config,
-                          cm);
-        } else {
-            Serial.println(F("Cannot enter calibration — sensors not ready"));
-            display.initScreen();
-            ctx.lastActivityTime = millis();
-        }
-        delay(Timing::LOOP_INTERVAL_MS);
-        return;
-    }
-
-    // Mag Field Check (Foreshot/Backshot)
-    if (menuMgr.exitAction() == MenuExitAction::ENTER_FB_CHECK) {
-        menuMgr.clearExitAction();
-        if (magOk && accelOk && dispOk && laserOk && calOk) {
-            Serial.println(F("Transitioning: menu → F/B field check"));
-            calMode.beginFBCheck(buttons, display, disco, laser, mag, accel, configMgr, calibration,
-                                 ctx.config);
-        } else {
-            Serial.println(F("Cannot enter F/B check — sensors/calibration not ready"));
-            display.initScreen();
-            ctx.lastActivityTime = millis();
-        }
-        delay(Timing::LOOP_INTERVAL_MS);
-        return;
-    }
-
-    // Snake
-    if (menuMgr.exitAction() == MenuExitAction::ENTER_SNAKE) {
-        menuMgr.clearExitAction();
-        if (dispOk) {
-            Serial.println(F("Transitioning: menu → snake game"));
-            laserOff();
-            snakeGame.begin(display.getDisplay(), buttons, disco);
-        }
-        delay(Timing::LOOP_INTERVAL_MS);
-        return;
-    }
-
-    // Update Firmware
-    if (menuMgr.exitAction() == MenuExitAction::ENTER_BOOTLOADER) {
-        menuMgr.clearExitAction();
-        Serial.println(F("Entering UF2 bootloader..."));
-        if (dispOk) {
-            auto &d = display.getDisplay();
-            d.clearDisplay();
-            d.setTextSize(1);
-            d.setTextColor(SH110X_WHITE);
-            d.setCursor(0, 10);
-            d.println(F("Entered bootloader"));
-            d.println();
-            d.println(F("Plug device into PC"));
-            d.println(F("and flash new"));
-            d.println(F("firmware (.uf2)"));
-            d.println();
-            d.println(F("Load new firmware or"));
-            d.println(F("hold power button"));
-            d.println(F("to exit."));
-            d.display();
-            delay(3000);
-        }
-
-        // Adafruit nRF52 core: reboot straight into the UF2 bootloader
-        enterUf2Dfu();
-        // Does not return
-    }
-
-    // USB drive mode (edit settings/calibration on a PC)
-    if (menuMgr.exitAction() == MenuExitAction::ENTER_USB_DRIVE) {
-        menuMgr.clearExitAction();
-        Serial.println(F("Rebooting into USB drive mode..."));
-        bool flagged = flashOk && configMgr.writeFlag(Flags::USB_DRIVE);
-        if (dispOk) {
-            auto &d = display.getDisplay();
-            d.clearDisplay();
-            d.setTextSize(1);
-            d.setTextColor(SH110X_WHITE);
-            d.setCursor(0, 20);
-            if (flagged) {
-                d.println(F("Restarting into"));
-                d.println(F("USB drive mode..."));
-            } else {
-                // Flag write failed (storage broken) — tell the user the
-                // button route, which needs no flash writes at all.
-                d.println(F("Storage error."));
-                d.println();
-                d.println(F("Hold DOWN (B3) while"));
-                d.println(F("powering on for USB"));
-                d.println(F("drive mode."));
-            }
-            d.display();
-        }
-        delay(flagged ? 1000 : 4000);
-        if (flagged) {
-            NVIC_SystemReset();
-            // Does not return
-        }
-        display.initScreen();
-        ctx.lastActivityTime = millis();
-        delay(Timing::LOOP_INTERVAL_MS);
-        return;
-    }
-
-    // Reformat internal storage (recovery)
-    if (menuMgr.exitAction() == MenuExitAction::REFORMAT_FLASH) {
-        menuMgr.clearExitAction();
-        Serial.println(F("Reformatting internal storage..."));
-        if (dispOk) {
-            auto &d = display.getDisplay();
-            d.clearDisplay();
-            d.setTextSize(1);
-            d.setTextColor(SH110X_WHITE);
-            d.setCursor(0, 40);
-            d.println(F("Erasing storage..."));
-            d.println();
-            d.println(F("Device will restart."));
-            d.display();
-        }
-        configMgr.reformat(); // formats LittleFS in place
-        delay(1500);
-        NVIC_SystemReset();
-        // Does not return
-    }
-    if (menuMgr.exitAction() == MenuExitAction::RETURN_NORMAL) {
-        menuMgr.clearExitAction();
-        Serial.println(F("Returning to normal mode"));
-        display.updateMeasureFrom(ctx.config.measureFromFront);
-        display.initScreen();
-        ctx.lastActivityTime = millis();
-        delay(Timing::LOOP_INTERVAL_MS);
-        return;
-    }
-
-    //  Calibration mode
-    if (calMode.isActive()) {
-        bool done = calMode.update();
-        if (done) {
-            Serial.println(F("Calibration mode finished."));
-            // Drain buttons held during save/discard (UP_DISCO or FIRE+UP_DISCO)
-            // to prevent pollButtons() treating the release as a disco toggle.
-            while (buttons.isPressed(Button::UP_DISCO) || buttons.isPressed(Button::FIRE)) {
-                buttons.update();
-                delay(Timing::LOOP_INTERVAL_MS);
-            }
-            // Consume any residual edge flags so the next loop doesn't
-            // see a stale wasPressed and trigger an unwanted measurement.
-            buttons.update();
-            buttons.wasPressed(Button::FIRE);
-            buttons.wasPressed(Button::UP_DISCO);
-            buttons.wasPressed(Button::DOWN);
-            buttons.wasPressed(Button::MENU);
-            calOk = calibration.isCalibrated();
-            if (calOk) {
-                sensorMgr.init(&calibration, ctx.config.emaAlphaStable, ctx.config.emaAlphaMoving,
-                               ctx.config.stabilityBufferLength, Defaults::emaJumpThreshold);
-            }
-            display.initScreen();
-            laserOn();
-            ctx.lastActivityTime = millis();
-        }
-        delay(Timing::LOOP_INTERVAL_MS);
-        return;
-    }
-
-    // ── Normal operation: cooperative polling ─────────────────────
-    readSensorsUpdate(now);
-    pollButtons(now);
-    pollMeasurement(now);
-    pollBLEPin(now);
-    pollBLECommands(now);
-    pollBattery(now);
-    checkAutoShutoff(now);
-    checkLaserTimeout(now);
-    updateDisplay(now);
-    disco.update(lastAccX, lastAccY, lastAccZ);
-
-    // ── Deferred flash write: sync RAM-buffered readings when idle ──
-    if (ctx.currentState == SystemState::IDLE && flashOk && configMgr.hasPendingToSync()) {
-        configMgr.syncPendingToFlash();
-    }
-
     delay(Timing::LOOP_INTERVAL_MS);
+    return;
+  }
+
+  // ── Menu mode: hand off to MenuManager, skip everything else ──
+  if (menuMgr.isActive()) {
+    menuMgr.update(buttons);
+    delay(Timing::LOOP_INTERVAL_MS);
+    return;
+  }
+
+  // ── Handle menu exit transitions (one-shot) ──
+  if (menuMgr.exitAction() == MenuExitAction::ENTER_PART1_CALIB ||
+      menuMgr.exitAction() == MenuExitAction::ENTER_PART2_CALIB ||
+      menuMgr.exitAction() == MenuExitAction::ENTER_SHORT_CALIB) {
+    CalMode cm = CalMode::PART1_ELLIPSOID;
+    if (menuMgr.exitAction() == MenuExitAction::ENTER_PART2_CALIB) {
+      cm = CalMode::PART2_ALIGNMENT;
+    } else if (menuMgr.exitAction() == MenuExitAction::ENTER_SHORT_CALIB) {
+      cm = CalMode::SHORT;
+    }
+    menuMgr.clearExitAction();
+    if (magOk && accelOk && dispOk && laserOk) {
+      Serial.println(F("Transitioning: menu → calibration"));
+      calMode.begin(buttons, display, disco, laser, mag, accel, configMgr,
+                    calibration, ctx.config, cm);
+    } else {
+      Serial.println(F("Cannot enter calibration — sensors not ready"));
+      display.initScreen();
+      ctx.lastActivityTime = millis();
+    }
+    delay(Timing::LOOP_INTERVAL_MS);
+    return;
+  }
+
+  // Mag Field Check (Foreshot/Backshot)
+  if (menuMgr.exitAction() == MenuExitAction::ENTER_FB_CHECK) {
+    menuMgr.clearExitAction();
+    if (magOk && accelOk && dispOk && laserOk && calOk) {
+      Serial.println(F("Transitioning: menu → F/B field check"));
+      calMode.beginFBCheck(buttons, display, disco, laser, mag, accel,
+                           configMgr, calibration, ctx.config);
+    } else {
+      Serial.println(
+          F("Cannot enter F/B check — sensors/calibration not ready"));
+      display.initScreen();
+      ctx.lastActivityTime = millis();
+    }
+    delay(Timing::LOOP_INTERVAL_MS);
+    return;
+  }
+
+  // Snake
+  if (menuMgr.exitAction() == MenuExitAction::ENTER_SNAKE) {
+    menuMgr.clearExitAction();
+    if (dispOk) {
+      Serial.println(F("Transitioning: menu → snake game"));
+      laserOff();
+      snakeGame.begin(display.getDisplay(), buttons, disco);
+    }
+    delay(Timing::LOOP_INTERVAL_MS);
+    return;
+  }
+
+  // Update Firmware
+  if (menuMgr.exitAction() == MenuExitAction::ENTER_BOOTLOADER) {
+    menuMgr.clearExitAction();
+    Serial.println(F("Entering UF2 bootloader..."));
+    if (dispOk) {
+      auto &d = display.getDisplay();
+      d.clearDisplay();
+      d.setTextSize(1);
+      d.setTextColor(SH110X_WHITE);
+      d.setCursor(0, 10);
+      d.println(F("Entered bootloader"));
+      d.println();
+      d.println(F("Plug device into PC"));
+      d.println(F("and flash new"));
+      d.println(F("firmware (.uf2)"));
+      d.println();
+      d.println(F("Load new firmware or"));
+      d.println(F("hold power button"));
+      d.println(F("to exit."));
+      d.display();
+      delay(3000);
+    }
+
+    // Adafruit nRF52 core: reboot straight into the UF2 bootloader
+    enterUf2Dfu();
+    // Does not return
+  }
+
+  // USB drive mode (edit settings/calibration on a PC)
+  if (menuMgr.exitAction() == MenuExitAction::ENTER_USB_DRIVE) {
+    menuMgr.clearExitAction();
+    Serial.println(F("Rebooting into USB drive mode..."));
+    bool flagged = flashOk && configMgr.writeFlag(Flags::USB_DRIVE);
+    if (dispOk) {
+      auto &d = display.getDisplay();
+      d.clearDisplay();
+      d.setTextSize(1);
+      d.setTextColor(SH110X_WHITE);
+      d.setCursor(0, 20);
+      if (flagged) {
+        d.println(F("Restarting into"));
+        d.println(F("USB drive mode..."));
+      } else {
+        // Flag write failed (storage broken) — tell the user the
+        // button route, which needs no flash writes at all.
+        d.println(F("Storage error."));
+        d.println();
+        d.println(F("Hold DOWN (B3) while"));
+        d.println(F("powering on for USB"));
+        d.println(F("drive mode."));
+      }
+      d.display();
+    }
+    delay(flagged ? 1000 : 4000);
+    if (flagged) {
+      NVIC_SystemReset();
+      // Does not return
+    }
+    display.initScreen();
+    ctx.lastActivityTime = millis();
+    delay(Timing::LOOP_INTERVAL_MS);
+    return;
+  }
+
+  // Reformat internal storage (recovery)
+  if (menuMgr.exitAction() == MenuExitAction::REFORMAT_FLASH) {
+    menuMgr.clearExitAction();
+    Serial.println(F("Reformatting internal storage..."));
+    if (dispOk) {
+      auto &d = display.getDisplay();
+      d.clearDisplay();
+      d.setTextSize(1);
+      d.setTextColor(SH110X_WHITE);
+      d.setCursor(0, 40);
+      d.println(F("Erasing storage..."));
+      d.println();
+      d.println(F("Device will restart."));
+      d.display();
+    }
+    configMgr.reformat(); // formats LittleFS in place
+    delay(1500);
+    NVIC_SystemReset();
+    // Does not return
+  }
+  if (menuMgr.exitAction() == MenuExitAction::RETURN_NORMAL) {
+    menuMgr.clearExitAction();
+    Serial.println(F("Returning to normal mode"));
+    display.updateMeasureFrom(ctx.config.measureFromFront);
+    display.initScreen();
+    ctx.lastActivityTime = millis();
+    delay(Timing::LOOP_INTERVAL_MS);
+    return;
+  }
+
+  //  Calibration mode
+  if (calMode.isActive()) {
+    bool done = calMode.update();
+    if (done) {
+      Serial.println(F("Calibration mode finished."));
+      // Drain buttons held during save/discard (UP_DISCO or FIRE+UP_DISCO)
+      // to prevent pollButtons() treating the release as a disco toggle.
+      while (buttons.isPressed(Button::UP_DISCO) ||
+             buttons.isPressed(Button::FIRE)) {
+        buttons.update();
+        delay(Timing::LOOP_INTERVAL_MS);
+      }
+      // Consume any residual edge flags so the next loop doesn't
+      // see a stale wasPressed and trigger an unwanted measurement.
+      buttons.update();
+      buttons.wasPressed(Button::FIRE);
+      buttons.wasPressed(Button::UP_DISCO);
+      buttons.wasPressed(Button::DOWN);
+      buttons.wasPressed(Button::MENU);
+      calOk = calibration.isCalibrated();
+      if (calOk) {
+        sensorMgr.init(
+            &calibration, ctx.config.emaAlphaStable, ctx.config.emaAlphaMoving,
+            ctx.config.stabilityBufferLength, Defaults::emaJumpThreshold);
+      }
+      display.initScreen();
+      laserOn();
+      ctx.lastActivityTime = millis();
+    }
+    delay(Timing::LOOP_INTERVAL_MS);
+    return;
+  }
+
+  // ── Normal operation: cooperative polling ─────────────────────
+  readSensorsUpdate(now);
+  pollButtons(now);
+  pollMeasurement(now);
+  pollBLEPin(now);
+  pollBLECommands(now);
+  pollBattery(now);
+  checkAutoShutoff(now);
+  checkLaserTimeout(now);
+  updateDisplay(now);
+  disco.update(lastAccX, lastAccY, lastAccZ);
+
+  // ── Deferred flash write: sync RAM-buffered readings when idle ──
+  if (ctx.currentState == SystemState::IDLE && flashOk &&
+      configMgr.hasPendingToSync()) {
+    configMgr.syncPendingToFlash();
+  }
+
+  delay(Timing::LOOP_INTERVAL_MS);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -669,125 +678,746 @@ void loop() {
 
 // ── Read sensors + update fusion at 50 Hz ───────────────────────
 static void readSensorsUpdate(uint32_t now) {
-    if (now - lastSensorUpdate < Timing::SENSOR_POLL_MS) {
-        return;
+  if (now - lastSensorUpdate < Timing::SENSOR_POLL_MS) {
+    return;
+  }
+
+  lastSensorUpdate = now;
+
+  if (magOk && mag.measurementComplete()) {
+    RM3100::Reading mr = mag.getLastReading();
+    mag.toMicroTesla(mr, lastMagX, lastMagY, lastMagZ);
+    mag.startSingleReading(); // immediately kick off next measurement
+  }
+
+  if (accelOk) {
+    float gx, gy, gz;
+    if (accel.readAcceleration(gx, gy, gz)) {
+      // SCA3300 reports g — convert to m/s² (V1 pipeline units)
+      lastAccX = gx * GRAVITY_MS2;
+      lastAccY = gy * GRAVITY_MS2;
+      lastAccZ = gz * GRAVITY_MS2;
+
+      // Motion detection without a gyro: deviation of the raw accel
+      // vector from its slow EMA. Seeded on the first sample.
+      if (!accEmaSeeded) {
+        accEmaX = lastAccX;
+        accEmaY = lastAccY;
+        accEmaZ = lastAccZ;
+        accEmaSeeded = true;
+      }
+      float dx = lastAccX - accEmaX;
+      float dy = lastAccY - accEmaY;
+      float dz = lastAccZ - accEmaZ;
+      deviceMoving =
+          sqrtf(dx * dx + dy * dy + dz * dz) > ACCEL_MOTION_THRESHOLD;
+      accEmaX += ACCEL_MOTION_EMA_ALPHA * dx;
+      accEmaY += ACCEL_MOTION_EMA_ALPHA * dy;
+      accEmaZ += ACCEL_MOTION_EMA_ALPHA * dz;
     }
+  }
 
-    lastSensorUpdate = now;
-
-    if (magOk && mag.measurementComplete()) {
-        RM3100::Reading mr = mag.getLastReading();
-        mag.toMicroTesla(mr, lastMagX, lastMagY, lastMagZ);
-        mag.startSingleReading(); // immediately kick off next measurement
+  // Raw-axis snapshot for axis-mapping commissioning (press 'r')
+  if (Serial.available()) {
+    int c = Serial.read();
+    if (c == 's' || c == 'S') {
+      teleplotEnabled = !teleplotEnabled;
+      Serial.println(teleplotEnabled ? F("Teleplot stream ON")
+                                     : F("Teleplot stream OFF"));
+    } else if (c == 'f' || c == 'F') {
+      // Reset filter tuning to firmware defaults — a stored config.json
+      // otherwise shadows new defaults forever (loadConfig prefers it).
+      ctx.config.emaAlphaStable = Defaults::emaAlphaStable;
+      ctx.config.emaAlphaMoving = Defaults::emaAlphaMoving;
+      ctx.config.stabilityBufferLength = Defaults::stabilityBufferLength;
+      bool saved = flashOk && configMgr.saveConfig(ctx.config);
+      if (calOk) {
+        sensorMgr.init(
+            &calibration, ctx.config.emaAlphaStable, ctx.config.emaAlphaMoving,
+            ctx.config.stabilityBufferLength, Defaults::emaJumpThreshold);
+      }
+      Serial.print(F("Filter reset: EMA stable="));
+      Serial.print(ctx.config.emaAlphaStable, 2);
+      Serial.print(F(", moving="));
+      Serial.print(ctx.config.emaAlphaMoving, 2);
+      Serial.print(F(", stability buf="));
+      Serial.print(ctx.config.stabilityBufferLength);
+      Serial.println(saved ? F(" (saved)") : F(" (NOT saved — storage error)"));
+    } else if (c == 'c' || c == 'C') {
+      Serial.println(F("--- /config.json ---"));
+      if (!configMgr.printConfig(Serial)) {
+        Serial.println(F("(no config file — running on defaults)"));
+      }
+    } else if (c == 'r' || c == 'R') {
+      Serial.print(F("RAW mag uT  X="));
+      Serial.print(lastMagX, 2);
+      Serial.print(F(" Y="));
+      Serial.print(lastMagY, 2);
+      Serial.print(F(" Z="));
+      Serial.print(lastMagZ, 2);
+      Serial.print(F("  |  acc m/s2  X="));
+      Serial.print(lastAccX, 2);
+      Serial.print(F(" Y="));
+      Serial.print(lastAccY, 2);
+      Serial.print(F(" Z="));
+      Serial.println(lastAccZ, 2);
     }
+  }
 
-    if (accelOk) {
-        float gx, gy, gz;
-        if (accel.readAcceleration(gx, gy, gz)) {
-            // SCA3300 reports g — convert to m/s² (V1 pipeline units)
-            lastAccX = gx * GRAVITY_MS2;
-            lastAccY = gy * GRAVITY_MS2;
-            lastAccZ = gz * GRAVITY_MS2;
+  if (calOk && magOk && accelOk) {
+    Eigen::Vector3f rawMag(lastMagX, lastMagY, lastMagZ);
+    Eigen::Vector3f rawGrav(lastAccX, lastAccY, lastAccZ);
+    sensorMgr.update(rawMag, rawGrav, deviceMoving);
 
-            // Motion detection without a gyro: deviation of the raw accel
-            // vector from its slow EMA. Seeded on the first sample.
-            if (!accEmaSeeded) {
-                accEmaX = lastAccX;
-                accEmaY = lastAccY;
-                accEmaZ = lastAccZ;
-                accEmaSeeded = true;
-            }
-            float dx = lastAccX - accEmaX;
-            float dy = lastAccY - accEmaY;
-            float dz = lastAccZ - accEmaZ;
-            deviceMoving = sqrtf(dx * dx + dy * dy + dz * dz) > ACCEL_MOTION_THRESHOLD;
-            accEmaX += ACCEL_MOTION_EMA_ALPHA * dx;
-            accEmaY += ACCEL_MOTION_EMA_ALPHA * dy;
-            accEmaZ += ACCEL_MOTION_EMA_ALPHA * dz;
+    // Boot-time sanity check: after EMA settles, verify field strength
+    if (!fieldCheckDone && ++fieldCheckCounter >= FIELD_CHECK_AFTER_SAMPLES) {
+      fieldCheckDone = true;
+      float expectedMag = calibration.mag().fieldAvg();
+      if (expectedMag > 0.0f) {
+        float actualMag = calibration.mag().getFieldStrength(rawMag);
+        float deviation = fabsf(actualMag - expectedMag) / expectedMag;
+        Serial.print(F("Field check: expected="));
+        Serial.print(expectedMag, 2);
+        Serial.print(F(" actual="));
+        Serial.print(actualMag, 2);
+        Serial.print(F(" dev="));
+        Serial.print(deviation * 100.0f, 1);
+        Serial.println(F("%"));
+        if (deviation > FIELD_CHECK_TOLERANCE) {
+          Serial.println(F("WARNING: field strength deviation >15% — "
+                           "calibration may be invalid"));
+          if (dispOk) {
+            display.updateDistanceText("CAL?");
+            display.refresh();
+            disco.setRed();
+            delay(3000);
+            disco.turnOff();
+          }
         }
+      }
     }
-
-    // Raw-axis snapshot for axis-mapping commissioning (press 'r')
-    if (Serial.available()) {
-        int c = Serial.read();
-        if (c == 's' || c == 'S') {
-            teleplotEnabled = !teleplotEnabled;
-            Serial.println(teleplotEnabled ? F("Teleplot stream ON") : F("Teleplot stream OFF"));
-        } else if (c == 'f' || c == 'F') {
-            // Reset filter tuning to firmware defaults — a stored config.json
-            // otherwise shadows new defaults forever (loadConfig prefers it).
-            ctx.config.emaAlphaStable = Defaults::emaAlphaStable;
-            ctx.config.emaAlphaMoving = Defaults::emaAlphaMoving;
-            ctx.config.stabilityBufferLength = Defaults::stabilityBufferLength;
-            bool saved = flashOk && configMgr.saveConfig(ctx.config);
-            if (calOk) {
-                sensorMgr.init(&calibration, ctx.config.emaAlphaStable, ctx.config.emaAlphaMoving,
-                               ctx.config.stabilityBufferLength, Defaults::emaJumpThreshold);
-            }
-            Serial.print(F("Filter reset: EMA stable="));
-            Serial.print(ctx.config.emaAlphaStable, 2);
-            Serial.print(F(", moving="));
-            Serial.print(ctx.config.emaAlphaMoving, 2);
-            Serial.print(F(", stability buf="));
-            Serial.print(ctx.config.stabilityBufferLength);
-            Serial.println(saved ? F(" (saved)") : F(" (NOT saved — storage error)"));
-        } else if (c == 'c' || c == 'C') {
-            Serial.println(F("--- /config.json ---"));
-            if (!configMgr.printConfig(Serial)) {
-                Serial.println(F("(no config file — running on defaults)"));
-            }
-        } else if (c == 'r' || c == 'R') {
-            Serial.print(F("RAW mag uT  X="));
-            Serial.print(lastMagX, 2);
-            Serial.print(F(" Y="));
-            Serial.print(lastMagY, 2);
-            Serial.print(F(" Z="));
-            Serial.print(lastMagZ, 2);
-            Serial.print(F("  |  acc m/s2  X="));
-            Serial.print(lastAccX, 2);
-            Serial.print(F(" Y="));
-            Serial.print(lastAccY, 2);
-            Serial.print(F(" Z="));
-            Serial.println(lastAccZ, 2);
-        }
-    }
-
-    if (calOk && magOk && accelOk) {
-        Eigen::Vector3f rawMag(lastMagX, lastMagY, lastMagZ);
-        Eigen::Vector3f rawGrav(lastAccX, lastAccY, lastAccZ);
-        sensorMgr.update(rawMag, rawGrav, deviceMoving);
-
-        // Boot-time sanity check: after EMA settles, verify field strength
-        if (!fieldCheckDone && ++fieldCheckCounter >= FIELD_CHECK_AFTER_SAMPLES) {
-            fieldCheckDone = true;
-            float expectedMag = calibration.mag().fieldAvg();
-            if (expectedMag > 0.0f) {
-                float actualMag = calibration.mag().getFieldStrength(rawMag);
-                float deviation = fabsf(actualMag - expectedMag) / expectedMag;
-                Serial.print(F("Field check: expected="));
-                Serial.print(expectedMag, 2);
-                Serial.print(F(" actual="));
-                Serial.print(actualMag, 2);
-                Serial.print(F(" dev="));
-                Serial.print(deviation * 100.0f, 1);
-                Serial.println(F("%"));
-                if (deviation > FIELD_CHECK_TOLERANCE) {
-                    Serial.println(F("WARNING: field strength deviation >15% — calibration may be invalid"));
-                    if (dispOk) {
-                        display.updateDistanceText("CAL?");
-                        display.refresh();
-                        disco.setRed();
-                        delay(3000);
-                        disco.turnOff();
-                    }
-                }
-            }
-        }
-    }
+  }
 }
 
 static void showSplaysDisabledToast() {
+  if (dispOk) {
+    auto &d = display.getDisplay();
+    d.clearDisplay();
+    d.setTextColor(SH110X_WHITE);
+    d.setTextSize(2);
+    d.setCursor(0, 44);
+    d.println(F("Splays not"));
+    d.println(F("enabled"));
+    d.display();
+  }
+  splaysToastTime = millis();
+}
+
+static void startDisco() {
+  disco.turnOn();
+  ctx.discoOn = true;
+  laser.setLaser(false);
+  ctx.laserEnabled = false;
+  Serial.println(F("DISCO: on"));
+}
+
+static void stopDisco() {
+  disco.turnOff();
+  ctx.discoOn = false;
+  laser.setLaser(false);
+  ctx.laserEnabled = false;
+  Serial.println(F("DISCO: off"));
+}
+
+static bool heldLongEnoughForDisco(uint32_t now, uint32_t start) {
+  return now - start >= Timing::DISCO_HOLD_MS;
+}
+
+static void prepareForShot() {
+  // Setup laser
+  laserOn();
+  lastDistance = 0;
+
+  ctx.displayFrozen = false;
+  disco.turnOff();
+  Serial.println(F("MEASURE: getting ready for a shot"));
+}
+
+// Call after prepare for shot
+static void startShot(bool isQuickShot) {
+  ctx.quickShot = isQuickShot;
+  ctx.displayFrozen = false;
+  ctx.currentState = SystemState::TAKING_MEASUREMENT;
+  ctx.measurementTaken = false;
+  lastDistance = 0;
+  Serial.println(F("MEASURE: taking measurement"));
+
+  if (!ctx.purpleLatched) {
+    disco.setRed();
+  }
+
+  Sounds::shotStart();
+}
+
+// ── Button event handling ───────────────────────────────────────
+static void pollButtons(uint32_t now) {
+  // Button 1 (FIRE — the trigger)
+  // Take measurement or wake laser
+  if (buttons.wasPressed(Button::FIRE)) {
+    ctx.lastActivityTime = now;
+    ctx.purpleLatched = false;
+
+    if (ctx.laserEnabled) {
+      startShot(REGULAR_SHOT);
+    } else {
+      prepareForShot();
+      delay(20);
+    }
+    return;
+  }
+
+  // Button 2 (UP_DISCO)
+  // Long press to toggle disco, short press for splay/quick shot
+  if (buttons.isPressed(Button::UP_DISCO)) {
+    ctx.lastActivityTime = now;
+    if (!discoHolding) {
+      discoHolding = true;
+      discoTriggered = false;
+      discoHoldStart = now;
+    } else if (!discoTriggered) {
+      if (heldLongEnoughForDisco(now, discoHoldStart)) {
+        discoTriggered = true;
+        ctx.discoOn ? stopDisco() : startDisco();
+      }
+    }
+    return;
+  } else { // Short press -> splay shot
+    if (discoHolding) {
+      discoHolding = false;
+
+      if (discoTriggered) {
+        discoTriggered = false;
+      } else {
+        if (ctx.config.splaysEnabled) {
+          ctx.laserEnabled ? startShot(QUICK_SHOT) : prepareForShot();
+        } else {
+          showSplaysDisabledToast();
+          Sounds::warning();
+        }
+      }
+      return;
+    }
+  }
+
+  // Button 4 (MENU)
+  if (buttons.wasPressed(Button::MENU) &&
+      ctx.currentState == SystemState::IDLE) {
+    ctx.lastActivityTime = now;
+    Serial.println(F("MENU pressed — entering menu mode"));
+    laser.setLaser(false);
+    ctx.laserEnabled = false;
+    disco.turnOff();
+    ctx.discoOn = false;
+    menuMgr.begin(display.getDisplay(), ctx, configMgr);
+    return;
+  }
+
+  // Button 3 (DOWN) is unused in normal mode.
+  // Power off is the hardware power button — see pollPowerButton().
+}
+
+// ── Measurement workflow ────────────────────────────────────────
+static void pollMeasurement(uint32_t now) {
+  if (ctx.currentState != SystemState::TAKING_MEASUREMENT) {
+    return;
+  }
+
+  if (ctx.measurementTaken) {
+    return;
+  }
+
+  if (!calOk || !magOk || !accelOk || !laserOk) {
+    Serial.println(F("MEAS: sensors not ready"));
+    ctx.quickShot = false;
+    ctx.currentState = SystemState::IDLE;
+    return;
+  }
+
+  // const ILegChecker &stabChecker = ctx.quickShot ?
+  // ctx.quickShotStabilityChecker : ctx.stabilityChecker;
+  const ILegChecker &stabChecker = ctx.stabilityChecker;
+
+  // No stability checking for quick shots. (In Beta)
+  if (!ctx.quickShot && !sensorMgr.isStable(stabChecker)) {
+    static uint32_t lastStabDbg = 0;
+    uint32_t n = millis();
+    if (n - lastStabDbg > 1000) {
+      lastStabDbg = n;
+      Serial.print(F("MEAS: waiting stable  AZ="));
+      Serial.print(sensorMgr.getAzimuth(), 1);
+      Serial.print(F(" INC="));
+      Serial.println(sensorMgr.getInclination(), 1);
+    }
+    return;
+  }
+
+  Serial.println(F("MEAS: taking measurement"));
+
+  // ── Stable — take measurement ────────────────────────────
+  ctx.readings.azimuth = sensorMgr.getAzimuth();
+  ctx.readings.inclination = sensorMgr.getInclination();
+  ctx.readings.roll = sensorMgr.getRoll();
+
+  // Flush any stale UART data before talking to laser
+  while (Serial1.available()) {
+    Serial1.read();
+  }
+  delay(30); // let the UART line settle
+
+  // Take laser distance
+  Serial.println(F("MEAS: sending measure cmd..."));
+  int32_t distMm = 0;
+  LaserError lErr = laser.measure(distMm);
+  Serial.print(F("MEAS: result="));
+  Serial.print(LaserManager::errorString(lErr));
+  Serial.print(F(" mm="));
+  Serial.println(distMm);
+
+  if (lErr != LaserError::OK) {
+    Serial.print(F("MEAS: laser error: "));
+    Serial.println(LaserManager::errorString(lErr));
+    resetLaser();
+    alertError("LzrERR");
+    ctx.quickShot = false;
+    ctx.currentState = SystemState::IDLE;
+    return;
+  }
+
+  ctx.readings.distance =
+      (distMm / 1000.0f) + (ctx.config.measureFromFront
+                                ? -Defaults::laserFrontOffset
+                                : ctx.config.laserDistanceOffset);
+
+  lastDistance = ctx.readings.distance;
+  Serial.print(F("MEAS: dist="));
+  Serial.println(ctx.readings.distance, 3);
+
+  // Anomaly detection
+  Serial.println(F("MEAS: checking anomaly..."));
+  if (ctx.config.anomalyDetection) {
+    Eigen::Vector3f rawMag(lastMagX, lastMagY, lastMagZ);
+    Eigen::Vector3f rawGrav(lastAccX, lastAccY, lastAccZ);
+    MagCal::Strictness strict = {ctx.config.magTolerance,
+                                 ctx.config.gravTolerance,
+                                 ctx.config.dipTolerance};
+    MagCal::AnomalyType anom =
+        calibration.checkAnomaly(rawMag, rawGrav, strict);
+    if (anom != MagCal::AnomalyType::NONE) {
+      const char *errStr = "Err";
+      switch (anom) {
+      case MagCal::AnomalyType::MAGNETIC:
+        errStr = "MagErr";
+        break;
+      case MagCal::AnomalyType::GRAVITY:
+        errStr = "GravErr";
+        break;
+      case MagCal::AnomalyType::DIP:
+        errStr = "DipErr";
+        break;
+      default:
+        break;
+      }
+      Serial.print(F("MEAS: anomaly: "));
+      Serial.println(errStr);
+      alertError(errStr);
+      // Still update display with the readings
+      dispAz = ctx.readings.azimuth;
+      dispInc = ctx.readings.inclination;
+      if (dispOk) {
+        display.updateSensorReadings(ctx.readings.distance,
+                                     ctx.readings.azimuth,
+                                     ctx.readings.inclination);
+        display.refresh();
+      }
+      ctx.quickShot = false;
+      ctx.currentState = SystemState::IDLE;
+      return;
+    }
+  }
+
+  // Success! Show distance immediately before blocking buzzer/wibble sequence
+  if (dispOk) {
+    display.updateSensorReadings(ctx.readings.distance, ctx.readings.azimuth,
+                                 ctx.readings.inclination);
+    display.refresh();
+  }
+
+  Serial.println(F("MEAS: calling handleSuccess..."));
+  handleMeasurementSuccess();
+  Serial.println(F("MEAS: handleSuccess done"));
+
+  // Freeze display — stays showing shot readings until next button press
+  dispAz = ctx.readings.azimuth;
+  dispInc = ctx.readings.inclination;
+  ctx.displayFrozen = true;
+
+  Serial.print(F("MEAS OK: AZ="));
+  Serial.print(ctx.readings.azimuth, 1);
+  Serial.print(F(" INC="));
+  Serial.print(ctx.readings.inclination, 1);
+  Serial.print(F(" DIST="));
+  Serial.println(ctx.readings.distance, 2);
+
+  ctx.currentState = SystemState::IDLE;
+
+  if (!ctx.purpleLatched) {
+    disco.turnOff();
+  }
+
+  // If doing quick shots, prepare again immediately.
+  if (ctx.quickShot) {
+    prepareForShot();
+  } else {
+    laserOff();
+  }
+  ctx.quickShot = false;
+}
+
+// ── Handle successful measurement ───────────────────────────────
+static void handleMeasurementSuccess() {
+  ctx.lastMeasurementTime = millis();
+
+  // Green disco to indicate successful reading.
+  // Beep later after we know if there was a successful leg.
+  disco.setGreen();
+
+  Serial.print(F("  HS:2 bleConn="));
+  Serial.print(ctx.bleConnected);
+  Serial.print(F(" bleOk="));
+  Serial.println(bleOk);
+  Serial.flush();
+  delay(50);
+
+  // Send via BLE or queue
+  if (ctx.bleConnected && bleOk) {
+    Serial.println(F("  HS:2a ble send"));
+    Serial.flush();
+    delay(50);
+    ble.sendSurveyData(ctx.readings.azimuth, ctx.readings.inclination,
+                       ctx.readings.distance);
+    ctx.bleDisconnectionCounter = 0;
+  } else {
+    ctx.bleDisconnectionCounter++;
     if (dispOk) {
+      display.updateBTNumber(ctx.bleDisconnectionCounter);
+    }
+    // Buffer reading in RAM — synced to flash during IDLE or shutdown
+    configMgr.appendPendingReading(
+        ctx.readings.azimuth, ctx.readings.inclination, ctx.readings.distance);
+  }
+
+  // ── Leg consistency buffer (skip for quick shots) ─────────
+  if (ctx.quickShot) {
+    Serial.println(F("  HS:3 quick shot — skipping leg buf"));
+    ctx.measurementTaken = false;
+    Sounds::readingOk();
+    // If doing quick shots, prepare again immediately
+    prepareForShot();
+    return;
+  }
+
+  Serial.println(F("  HS:3 leg buf"));
+  Serial.flush();
+  ctx.shotBuf.push(Shot(ctx.readings.azimuth, ctx.readings.inclination,
+                        ctx.readings.distance));
+
+  Serial.println(F("  HS:4 leg check"));
+  Serial.flush();
+
+  if (ctx.shotBuf.hasValidLeg()) {
+    // Rising fanfare under a white flash (was: triple buzz + flash)
+    disco.setWhite();
+    Sounds::legComplete();
+    disco.turnOff();
+
+    // Laser wibble to indicate leg detected
+    if (ctx.config.laserWibble) {
+      laser.wibble();
+    }
+
+    ctx.shotBuf.clear();
+
+    // Latch purple
+    disco.setPurple();
+    ctx.purpleLatched = true;
+    ctx.measurementTaken = true;
+
+    Serial.println(F("LEG COMPLETE — 3 consistent readings"));
+    return;
+  }
+
+  // Successful reading but leg not complete
+  // (function already returned if leg complete)
+  Sounds::readingOk();
+
+  Serial.println(F("  HS:5 done"));
+  Serial.flush();
+  ctx.measurementTaken = false;
+}
+
+// ── Error alert — red flash sequence ────────────────────────────
+static void alertError(const char *errCode) {
+  if (dispOk) {
+    display.updateDistanceText(errCode);
+    display.refresh();
+  }
+
+  // Red failure disco
+  disco.turnOff();
+  for (int i = 0; i < 4; i++) {
+    disco.setRed();
+    delay(100);
+    disco.turnOff();
+    delay(100);
+  }
+
+  // Beep after error flashes
+  Sounds::error();
+
+  // Re-enable laser
+  laser.setLaser(true);
+  ctx.laserEnabled = true;
+  ctx.measurementTaken = true;
+}
+
+// ── BLE pin monitoring (connection state + flush) ───────────────
+static void pollBLEPin(uint32_t now) {
+  if (!bleOk) {
+    return;
+  }
+  if (now - lastBleCheck < Timing::BLE_PIN_CHECK_MS) {
+    return;
+  }
+  lastBleCheck = now;
+
+  bool connected = ble.isConnected();
+  ctx.bleConnected = connected;
+
+  // Transition: disconnected → connected
+  if (connected && !lastBleConnected) {
+    Serial.println(F("BLE: connected"));
+
+    // Flush pending readings if any
+    if (ctx.bleDisconnectionCounter > 0 && flashOk) {
+      disco.setBlue();
+      if (dispOk) {
+        display.updateBTNumber(ctx.bleDisconnectionCounter);
+        display.refresh();
+      }
+      delay(1000); // let BLE slave be ready
+
+      configMgr.flushPendingReadings(onFlushReading);
+      configMgr.clearPendingReadings();
+
+      ctx.bleDisconnectionCounter = 0;
+      ctx.bleReadingsTransferredFlag = false;
+      disco.turnOff();
+      Serial.println(F("BLE: pending readings flushed"));
+    }
+  }
+
+  if (!connected && lastBleConnected) {
+    Serial.println(F("BLE: disconnected"));
+  }
+
+  // Update display
+  if (dispOk) {
+    display.updateBTLabel(connected);
+    if (connected) {
+      if (ctx.bleReadingsTransferredFlag) {
+        display.updateBTNumber(0);
+        ctx.bleDisconnectionCounter = 0;
+      } else {
+        display.updateBTNumber(0);
+      }
+    } else {
+      display.updateBTNumber(ctx.bleDisconnectionCounter);
+    }
+  }
+
+  lastBleConnected = connected;
+}
+
+// ── BLE UART command processing ─────────────────────────────────
+static void pollBLECommands(uint32_t now) {
+  if (!bleOk) {
+    return;
+  }
+  if (now - lastBleUartPoll < Timing::BLE_UART_POLL_MS) {
+    return;
+  }
+  lastBleUartPoll = now;
+
+  ble.update();
+  if (!ble.hasCommand()) {
+    return;
+  }
+
+  BleCommand cmd = ble.readCommand();
+  Serial.print(F("BLE CMD: "));
+  Serial.println(BleManager::commandName(cmd));
+
+  switch (cmd) {
+  case BleCommand::ACK_RECEIVED:
+    ctx.bleReadingsTransferredFlag = true;
+    break;
+
+  case BleCommand::TAKE_SHOT:
+    prepareForShot();
+    startShot(REGULAR_SHOT);
+    ctx.lastActivityTime = now;
+    break;
+
+  case BleCommand::LASER_ON:
+    laserOn();
+    break;
+
+  case BleCommand::LASER_OFF:
+    laserOff();
+    break;
+
+  case BleCommand::DEVICE_OFF:
+    doShutdown();
+    break;
+
+  case BleCommand::START_CAL:
+    Serial.println(F("BLE: entering menu mode"));
+    laserOff();
+    disco.turnOff();
+    ctx.discoOn = false;
+    menuMgr.begin(display.getDisplay(), ctx, configMgr);
+    break;
+
+  case BleCommand::STOP_CAL:
+    ctx.currentState = SystemState::IDLE;
+    break;
+
+  default:
+    break;
+  }
+}
+
+// ── Hardware power button (LTC2954 INT, edge-triggered) ─────────────
+// (Replaces both V1's SHUTDOWN GPIO button and the DiscoX UART name-sync
+// handshake — the BLE name is now set locally at boot in initBle().)
+static void pollPowerButton(uint32_t now) {
+  bool pressed = power.buttonPressed(); // INT reads LOW
+
+  // Boot-hold guard: don't arm until the power-on press has released
+  if (!pwrBtnArmed) {
+    if (!pressed) {
+      pwrBtnArmed = true;
+    }
+    return;
+  }
+
+  if (!pressed) {
+    pwrBtnLowSince = 0;
+    return;
+  }
+
+  if (pwrBtnLowSince == 0) {
+    pwrBtnLowSince = now;                  // LOW edge — start confirm window
+  } else if (now - pwrBtnLowSince >= 20) { // 20 ms confirm (INT pulses <1 s)
+    Serial.println(F("SHUTDOWN: power button pressed"));
+    doShutdown();
+  }
+}
+
+// ── Battery check (every 30s) ───────────────────────────────────
+static void pollBattery(uint32_t now) {
+  if (!batOk) {
+    return;
+  }
+  if (now - lastBatRead < Timing::BATTERY_CHECK_MS) {
+    return;
+  }
+  lastBatRead = now;
+
+  lastBatPct = battery.cellPercent();
+  ctx.readings.batteryLevel = lastBatPct;
+  Serial.print(F("BAT: "));
+  Serial.print(battery.cellVoltage(), 3);
+  Serial.print(F("V  "));
+  Serial.print(lastBatPct, 1);
+  Serial.println(F("%"));
+
+  if (dispOk) {
+    display.updateBattery(lastBatPct);
+  }
+
+  if (lastBatPct > 0.5f && lastBatPct <= Timing::BATTERY_SHUTDOWN_PCT) {
+    Serial.println(F("LOW BATTERY — shutting down"));
+    if (dispOk) {
+      display.updateDistanceText("LOW");
+      display.updateAzimuth(0);
+      display.updateInclination(0);
+      display.refresh();
+    }
+    disco.setRed();
+    delay(3000);
+    doShutdown();
+  }
+}
+
+// ── Auto shutdown check (every 5s) ──────────────────────────────
+static void checkAutoShutoff(uint32_t now) {
+  if (now - lastAutoShutCheck < Timing::AUTO_SHUTOFF_CHECK_MS) {
+    return;
+  }
+  lastAutoShutCheck = now;
+
+  uint32_t inactiveSec = (now - ctx.lastActivityTime) / 1000;
+  if (inactiveSec > ctx.config.autoShutdownTimeout) {
+    Serial.println(F("Inactivity timeout — shutting down"));
+    doShutdown();
+  }
+}
+
+// ── Laser timeout check (every 1s) ─────────────────────────────
+static void checkLaserTimeout(uint32_t now) {
+  if (now - lastLaserTimeCheck < Timing::LASER_TIMEOUT_CHECK_MS) {
+    return;
+  }
+  lastLaserTimeCheck = now;
+
+  if (!ctx.laserEnabled) {
+    return;
+  }
+
+  uint32_t inactiveSec = (now - ctx.lastActivityTime) / 1000;
+  if (inactiveSec > ctx.config.laserTimeout) {
+    Serial.println(F("Laser timeout — turning off"));
+    if (laserOk) {
+      laser.setLaser(false);
+    }
+    ctx.laserEnabled = false;
+  }
+}
+
+// ── Display update (4 Hz) ───────────────────────────────────────
+static void updateDisplay(uint32_t now) {
+  if (!dispOk) {
+    return;
+  }
+
+  // Show "Splays not enabled" toast for 2s, suppressing normal refresh.
+  // Use millis() not now — now is stale from the top of loop() and may
+  // predate splaysToastTime (set after a blocking beep), causing underflow.
+  if (splaysToastTime != 0) {
+    if (millis() - splaysToastTime < 1200) {
+      if (now - lastDisplayRefresh >= Timing::DISPLAY_REFRESH_MS) {
+        lastDisplayRefresh = now;
         auto &d = display.getDisplay();
         d.clearDisplay();
         d.setTextColor(SH110X_WHITE);
@@ -796,670 +1426,58 @@ static void showSplaysDisabledToast() {
         d.println(F("Splays not"));
         d.println(F("enabled"));
         d.display();
-    }
-    splaysToastTime = millis();
-}
-
-static void startDisco() {
-    disco.turnOn();
-    ctx.discoOn = true;
-    laser.setLaser(false);
-    ctx.laserEnabled = false;
-    Serial.println(F("DISCO: on"));
-}
-
-static void stopDisco() {
-    disco.turnOff();
-    ctx.discoOn = false;
-    laser.setLaser(false);
-    ctx.laserEnabled = false;
-    Serial.println(F("DISCO: off"));
-}
-
-
-static bool heldLongEnoughForDisco(uint32_t now, uint32_t start) {
-    return now - start >= Timing::DISCO_HOLD_MS;
-}
-
-
-static void prepareForShot() {
-    // Setup laser
-    laserOn();
-    lastDistance = 0;
-
-    ctx.displayFrozen = false;
-    disco.turnOff();
-    Serial.println(F("MEASURE: getting ready for a shot"));
-}
-
-// Call after prepare for shot
-static void startShot(bool isQuickShot) {
-    ctx.quickShot = isQuickShot;
-    ctx.displayFrozen = false;
-    ctx.currentState = SystemState::TAKING_MEASUREMENT;
-    ctx.measurementTaken = false;
-    lastDistance = 0;
-    Serial.println(F("MEASURE: taking measurement"));
-
-    if (!ctx.purpleLatched) {
-        disco.setRed();
-    }
-
-    Sounds::shotStart();
-}
-
-
-// ── Button event handling ───────────────────────────────────────
-static void pollButtons(uint32_t now) {
-    // Button 1 (FIRE — the trigger)
-    // Take measurement or wake laser
-    if (buttons.wasPressed(Button::FIRE)) {
-        ctx.lastActivityTime = now;
-        ctx.purpleLatched = false;
-
-        if (ctx.laserEnabled) {
-            startShot(REGULAR_SHOT);
-        } else {
-            prepareForShot();
-            delay(20);
-        }
-        return;
-    }
-
-    // Button 2 (UP_DISCO)
-    // Long press to toggle disco, short press for splay/quick shot
-    if (buttons.isPressed(Button::UP_DISCO)) {
-        ctx.lastActivityTime = now;
-        if (!discoHolding) {
-            discoHolding = true;
-            discoTriggered = false;
-            discoHoldStart = now;
-        } else if (!discoTriggered) {
-            if (heldLongEnoughForDisco(now, discoHoldStart)) {
-                discoTriggered = true;
-                ctx.discoOn ? stopDisco() : startDisco();
-            }
-        }
-        return;
-    } else { // Short press -> splay shot
-        if (discoHolding) {
-            discoHolding = false;
-
-            if (discoTriggered) {
-                discoTriggered = false;
-            } else {
-                if (ctx.config.splaysEnabled) {
-                    ctx.laserEnabled ? startShot(QUICK_SHOT) : prepareForShot();
-                } else {
-                    showSplaysDisabledToast();
-                    Sounds::warning();
-                }
-            }
-            return;
-        }
-    }
-
-
-    // Button 4 (MENU)
-    if (buttons.wasPressed(Button::MENU) && ctx.currentState == SystemState::IDLE) {
-        ctx.lastActivityTime = now;
-        Serial.println(F("MENU pressed — entering menu mode"));
-        laser.setLaser(false);
-        ctx.laserEnabled = false;
-        disco.turnOff();
-        ctx.discoOn = false;
-        menuMgr.begin(display.getDisplay(), ctx, configMgr);
-        return;
-    }
-
-    // Button 3 (DOWN) is unused in normal mode.
-    // Power off is the hardware power button — see pollPowerButton().
-}
-
-
-// ── Measurement workflow ────────────────────────────────────────
-static void pollMeasurement(uint32_t now) {
-    if (ctx.currentState != SystemState::TAKING_MEASUREMENT) {
-        return;
-    }
-
-    if (ctx.measurementTaken) {
-        return;
-    }
-
-    if (!calOk || !magOk || !accelOk || !laserOk) {
-        Serial.println(F("MEAS: sensors not ready"));
-        ctx.quickShot = false;
-        ctx.currentState = SystemState::IDLE;
-        return;
-    }
-
-    // const ILegChecker &stabChecker = ctx.quickShot ? ctx.quickShotStabilityChecker : ctx.stabilityChecker;
-    const ILegChecker &stabChecker = ctx.stabilityChecker;
-
-    // No stability checking for quick shots. (In Beta)
-    if (!ctx.quickShot && !sensorMgr.isStable(stabChecker)) {
-        static uint32_t lastStabDbg = 0;
-        uint32_t n = millis();
-        if (n - lastStabDbg > 1000) {
-            lastStabDbg = n;
-            Serial.print(F("MEAS: waiting stable  AZ="));
-            Serial.print(sensorMgr.getAzimuth(), 1);
-            Serial.print(F(" INC="));
-            Serial.println(sensorMgr.getInclination(), 1);
-        }
-        return;
-    }
-
-    Serial.println(F("MEAS: taking measurement"));
-
-    // ── Stable — take measurement ────────────────────────────
-    ctx.readings.azimuth = sensorMgr.getAzimuth();
-    ctx.readings.inclination = sensorMgr.getInclination();
-    ctx.readings.roll = sensorMgr.getRoll();
-
-    // Flush any stale UART data before talking to laser
-    while (Serial1.available()) {
-        Serial1.read();
-    }
-    delay(30); // let the UART line settle
-
-    // Take laser distance
-    Serial.println(F("MEAS: sending measure cmd..."));
-    int32_t distMm = 0;
-    LaserError lErr = laser.measure(distMm);
-    Serial.print(F("MEAS: result="));
-    Serial.print(LaserManager::errorString(lErr));
-    Serial.print(F(" mm="));
-    Serial.println(distMm);
-
-    if (lErr != LaserError::OK) {
-        Serial.print(F("MEAS: laser error: "));
-        Serial.println(LaserManager::errorString(lErr));
-        resetLaser();
-        alertError("LzrERR");
-        ctx.quickShot = false;
-        ctx.currentState = SystemState::IDLE;
-        return;
-    }
-
-    ctx.readings.distance =
-        (distMm / 1000.0f) +
-        (ctx.config.measureFromFront ? -Defaults::laserFrontOffset : ctx.config.laserDistanceOffset);
-
-    lastDistance = ctx.readings.distance;
-    Serial.print(F("MEAS: dist="));
-    Serial.println(ctx.readings.distance, 3);
-
-    // Anomaly detection
-    Serial.println(F("MEAS: checking anomaly..."));
-    if (ctx.config.anomalyDetection) {
-        Eigen::Vector3f rawMag(lastMagX, lastMagY, lastMagZ);
-        Eigen::Vector3f rawGrav(lastAccX, lastAccY, lastAccZ);
-        MagCal::Strictness strict = {ctx.config.magTolerance, ctx.config.gravTolerance,
-                                     ctx.config.dipTolerance};
-        MagCal::AnomalyType anom = calibration.checkAnomaly(rawMag, rawGrav, strict);
-        if (anom != MagCal::AnomalyType::NONE) {
-            const char *errStr = "Err";
-            switch (anom) {
-            case MagCal::AnomalyType::MAGNETIC:
-                errStr = "MagErr";
-                break;
-            case MagCal::AnomalyType::GRAVITY:
-                errStr = "GravErr";
-                break;
-            case MagCal::AnomalyType::DIP:
-                errStr = "DipErr";
-                break;
-            default:
-                break;
-            }
-            Serial.print(F("MEAS: anomaly: "));
-            Serial.println(errStr);
-            alertError(errStr);
-            // Still update display with the readings
-            dispAz = ctx.readings.azimuth;
-            dispInc = ctx.readings.inclination;
-            if (dispOk) {
-                display.updateSensorReadings(ctx.readings.distance, ctx.readings.azimuth,
-                                             ctx.readings.inclination);
-                display.refresh();
-            }
-            ctx.quickShot = false;
-            ctx.currentState = SystemState::IDLE;
-            return;
-        }
-    }
-
-    // Success! Show distance immediately before blocking buzzer/wibble sequence
-    if (dispOk) {
-        display.updateSensorReadings(ctx.readings.distance, ctx.readings.azimuth, ctx.readings.inclination);
-        display.refresh();
-    }
-
-    Serial.println(F("MEAS: calling handleSuccess..."));
-    handleMeasurementSuccess();
-    Serial.println(F("MEAS: handleSuccess done"));
-
-    // Freeze display — stays showing shot readings until next button press
-    dispAz = ctx.readings.azimuth;
-    dispInc = ctx.readings.inclination;
-    ctx.displayFrozen = true;
-
-
-    Serial.print(F("MEAS OK: AZ="));
-    Serial.print(ctx.readings.azimuth, 1);
-    Serial.print(F(" INC="));
-    Serial.print(ctx.readings.inclination, 1);
-    Serial.print(F(" DIST="));
-    Serial.println(ctx.readings.distance, 2);
-
-    ctx.currentState = SystemState::IDLE;
-
-    if (!ctx.purpleLatched) {
-        disco.turnOff();
-    }
-
-    // If doing quick shots, prepare again immediately.
-    if (ctx.quickShot) {
-        prepareForShot();
+      }
+      return;
     } else {
-        laserOff();
+      splaysToastTime = 0;
     }
-    ctx.quickShot = false;
-}
+  }
 
-// ── Handle successful measurement ───────────────────────────────
-static void handleMeasurementSuccess() {
-    ctx.lastMeasurementTime = millis();
+  if (now - lastDisplayRefresh < Timing::DISPLAY_REFRESH_MS) {
+    return;
+  }
+  lastDisplayRefresh = now;
 
-    // Green disco to indicate successful reading.
-    // Beep later after we know if there was a successful leg.
-    disco.setGreen();
-
-    Serial.print(F("  HS:2 bleConn="));
-    Serial.print(ctx.bleConnected);
-    Serial.print(F(" bleOk="));
-    Serial.println(bleOk);
-    Serial.flush();
-    delay(50);
-
-    // Send via BLE or queue
-    if (ctx.bleConnected && bleOk) {
-        Serial.println(F("  HS:2a ble send"));
-        Serial.flush();
-        delay(50);
-        ble.sendSurveyData(ctx.readings.azimuth, ctx.readings.inclination, ctx.readings.distance);
-        ctx.bleDisconnectionCounter = 0;
+  // Only update live sensor readings when display is not frozen.
+  // After a measurement the display stays frozen showing the shot
+  // reading until the user presses MEASURE again to resume live mode.
+  if (!ctx.displayFrozen) {
+    float liveAz, liveInc;
+    if (calOk) {
+      liveAz = sensorMgr.getAzimuth();
+      liveInc = sensorMgr.getInclination();
     } else {
-        ctx.bleDisconnectionCounter++;
-        if (dispOk) {
-            display.updateBTNumber(ctx.bleDisconnectionCounter);
-        }
-        // Buffer reading in RAM — synced to flash during IDLE or shutdown
-        configMgr.appendPendingReading(ctx.readings.azimuth, ctx.readings.inclination, ctx.readings.distance);
+      liveAz = wrapTo360(radiansToDegrees(atan2f(lastMagY, lastMagX)));
+      liveInc = radiansToDegrees(
+          atan2f(lastAccZ, sqrtf(lastAccX * lastAccX + lastAccY * lastAccY)));
     }
 
-    // ── Leg consistency buffer (skip for quick shots) ─────────
-    if (ctx.quickShot) {
-        Serial.println(F("  HS:3 quick shot — skipping leg buf"));
-        ctx.measurementTaken = false;
-        Sounds::readingOk();
-        // If doing quick shots, prepare again immediately
-        prepareForShot();
-        return;
+    // Live update with a small deadband against last-digit flicker.
+    // V1's motion-gated freeze + anchor clamp (which hid the noisy
+    // ISM330DHCX by locking the display to ±0.1° once still) is gone —
+    // the SCA3300/RM3100 EMA output is steady enough to show live, and
+    // the clamp could mask slow re-aims below the motion threshold.
+    if (circularDiff(liveAz, dispAz) > DEADBAND_ANGLE) {
+      dispAz = liveAz;
+    }
+    if (fabsf(liveInc - dispInc) > DEADBAND_ANGLE) {
+      dispInc = liveInc;
     }
 
-    Serial.println(F("  HS:3 leg buf"));
-    Serial.flush();
-    ctx.shotBuf.push(Shot(ctx.readings.azimuth, ctx.readings.inclination, ctx.readings.distance));
+    display.updateSensorReadings(lastDistance, dispAz, dispInc);
 
-    Serial.println(F("  HS:4 leg check"));
-    Serial.flush();
-
-    if (ctx.shotBuf.hasValidLeg()) {
-        // Rising fanfare under a white flash (was: triple buzz + flash)
-        disco.setWhite();
-        Sounds::legComplete();
-        disco.turnOff();
-
-        // Laser wibble to indicate leg detected
-        if (ctx.config.laserWibble) {
-            laser.wibble();
-        }
-
-        ctx.shotBuf.clear();
-
-        // Latch purple
-        disco.setPurple();
-        ctx.purpleLatched = true;
-        ctx.measurementTaken = true;
-
-        Serial.println(F("LEG COMPLETE — 3 consistent readings"));
-        return;
+    // Teleplot output ('s' in the serial monitor silences/resumes)
+    if (teleplotEnabled) {
+      Serial.print(F(">azimuth:"));
+      Serial.println(dispAz, 1);
+      Serial.print(F(">inclination:"));
+      Serial.println(dispInc, 1);
     }
+  }
 
-    // Successful reading but leg not complete
-    // (function already returned if leg complete)
-    Sounds::readingOk();
-
-    Serial.println(F("  HS:5 done"));
-    Serial.flush();
-    ctx.measurementTaken = false;
-}
-
-// ── Error alert — red flash sequence ────────────────────────────
-static void alertError(const char *errCode) {
-    if (dispOk) {
-        display.updateDistanceText(errCode);
-        display.refresh();
-    }
-
-    // Red failure disco
-    disco.turnOff();
-    for (int i = 0; i < 4; i++) {
-        disco.setRed();
-        delay(100);
-        disco.turnOff();
-        delay(100);
-    }
-
-    // Beep after error flashes
-    Sounds::error();
-
-    // Re-enable laser
-    laser.setLaser(true);
-    ctx.laserEnabled = true;
-    ctx.measurementTaken = true;
-}
-
-// ── BLE pin monitoring (connection state + flush) ───────────────
-static void pollBLEPin(uint32_t now) {
-    if (!bleOk) {
-        return;
-    }
-    if (now - lastBleCheck < Timing::BLE_PIN_CHECK_MS) {
-        return;
-    }
-    lastBleCheck = now;
-
-    bool connected = ble.isConnected();
-    ctx.bleConnected = connected;
-
-    // Transition: disconnected → connected
-    if (connected && !lastBleConnected) {
-        Serial.println(F("BLE: connected"));
-
-        // Flush pending readings if any
-        if (ctx.bleDisconnectionCounter > 0 && flashOk) {
-            disco.setBlue();
-            if (dispOk) {
-                display.updateBTNumber(ctx.bleDisconnectionCounter);
-                display.refresh();
-            }
-            delay(1000); // let BLE slave be ready
-
-            configMgr.flushPendingReadings(onFlushReading);
-            configMgr.clearPendingReadings();
-
-            ctx.bleDisconnectionCounter = 0;
-            ctx.bleReadingsTransferredFlag = false;
-            disco.turnOff();
-            Serial.println(F("BLE: pending readings flushed"));
-        }
-    }
-
-    if (!connected && lastBleConnected) {
-        Serial.println(F("BLE: disconnected"));
-    }
-
-    // Update display
-    if (dispOk) {
-        display.updateBTLabel(connected);
-        if (connected) {
-            if (ctx.bleReadingsTransferredFlag) {
-                display.updateBTNumber(0);
-                ctx.bleDisconnectionCounter = 0;
-            } else {
-                display.updateBTNumber(0);
-            }
-        } else {
-            display.updateBTNumber(ctx.bleDisconnectionCounter);
-        }
-    }
-
-    lastBleConnected = connected;
-}
-
-// ── BLE UART command processing ─────────────────────────────────
-static void pollBLECommands(uint32_t now) {
-    if (!bleOk) {
-        return;
-    }
-    if (now - lastBleUartPoll < Timing::BLE_UART_POLL_MS) {
-        return;
-    }
-    lastBleUartPoll = now;
-
-    ble.update();
-    if (!ble.hasCommand()) {
-        return;
-    }
-
-    BleCommand cmd = ble.readCommand();
-    Serial.print(F("BLE CMD: "));
-    Serial.println(BleManager::commandName(cmd));
-
-    switch (cmd) {
-    case BleCommand::ACK_RECEIVED:
-        ctx.bleReadingsTransferredFlag = true;
-        break;
-
-    case BleCommand::TAKE_SHOT:
-        prepareForShot();
-        startShot(REGULAR_SHOT);
-        ctx.lastActivityTime = now;
-        break;
-
-    case BleCommand::LASER_ON:
-        laserOn();
-        break;
-
-    case BleCommand::LASER_OFF:
-        laserOff();
-        break;
-
-    case BleCommand::DEVICE_OFF:
-        doShutdown();
-        break;
-
-    case BleCommand::START_CAL:
-        Serial.println(F("BLE: entering menu mode"));
-        laserOff();
-        disco.turnOff();
-        ctx.discoOn = false;
-        menuMgr.begin(display.getDisplay(), ctx, configMgr);
-        break;
-
-    case BleCommand::STOP_CAL:
-        ctx.currentState = SystemState::IDLE;
-        break;
-
-    default:
-        break;
-    }
-}
-
-// ── Hardware power button (LTC2954 INT, edge-triggered) ─────────────
-// (Replaces both V1's SHUTDOWN GPIO button and the DiscoX UART name-sync
-// handshake — the BLE name is now set locally at boot in initBle().)
-static void pollPowerButton(uint32_t now) {
-    bool pressed = power.buttonPressed(); // INT reads LOW
-
-    // Boot-hold guard: don't arm until the power-on press has released
-    if (!pwrBtnArmed) {
-        if (!pressed) {
-            pwrBtnArmed = true;
-        }
-        return;
-    }
-
-    if (!pressed) {
-        pwrBtnLowSince = 0;
-        return;
-    }
-
-    if (pwrBtnLowSince == 0) {
-        pwrBtnLowSince = now;      // LOW edge — start confirm window
-    } else if (now - pwrBtnLowSince >= 20) { // 20 ms confirm (INT pulses <1 s)
-        Serial.println(F("SHUTDOWN: power button pressed"));
-        doShutdown();
-    }
-}
-
-// ── Battery check (every 30s) ───────────────────────────────────
-static void pollBattery(uint32_t now) {
-    if (!batOk) {
-        return;
-    }
-    if (now - lastBatRead < Timing::BATTERY_CHECK_MS) {
-        return;
-    }
-    lastBatRead = now;
-
-    lastBatPct = battery.cellPercent();
-    ctx.readings.batteryLevel = lastBatPct;
-    Serial.print(F("BAT: "));
-    Serial.print(battery.cellVoltage(), 3);
-    Serial.print(F("V  "));
-    Serial.print(lastBatPct, 1);
-    Serial.println(F("%"));
-
-    if (dispOk) {
-        display.updateBattery(lastBatPct);
-    }
-
-    if (lastBatPct > 0.5f && lastBatPct <= Timing::BATTERY_SHUTDOWN_PCT) {
-        Serial.println(F("LOW BATTERY — shutting down"));
-        if (dispOk) {
-            display.updateDistanceText("LOW");
-            display.updateAzimuth(0);
-            display.updateInclination(0);
-            display.refresh();
-        }
-        disco.setRed();
-        delay(3000);
-        doShutdown();
-    }
-}
-
-// ── Auto shutdown check (every 5s) ──────────────────────────────
-static void checkAutoShutoff(uint32_t now) {
-    if (now - lastAutoShutCheck < Timing::AUTO_SHUTOFF_CHECK_MS) {
-        return;
-    }
-    lastAutoShutCheck = now;
-
-    uint32_t inactiveSec = (now - ctx.lastActivityTime) / 1000;
-    if (inactiveSec > ctx.config.autoShutdownTimeout) {
-        Serial.println(F("Inactivity timeout — shutting down"));
-        doShutdown();
-    }
-}
-
-// ── Laser timeout check (every 1s) ─────────────────────────────
-static void checkLaserTimeout(uint32_t now) {
-    if (now - lastLaserTimeCheck < Timing::LASER_TIMEOUT_CHECK_MS) {
-        return;
-    }
-    lastLaserTimeCheck = now;
-
-    if (!ctx.laserEnabled) {
-        return;
-    }
-
-    uint32_t inactiveSec = (now - ctx.lastActivityTime) / 1000;
-    if (inactiveSec > ctx.config.laserTimeout) {
-        Serial.println(F("Laser timeout — turning off"));
-        if (laserOk) {
-            laser.setLaser(false);
-        }
-        ctx.laserEnabled = false;
-    }
-}
-
-// ── Display update (4 Hz) ───────────────────────────────────────
-static void updateDisplay(uint32_t now) {
-    if (!dispOk) {
-        return;
-    }
-
-    // Show "Splays not enabled" toast for 2s, suppressing normal refresh.
-    // Use millis() not now — now is stale from the top of loop() and may
-    // predate splaysToastTime (set after a blocking beep), causing underflow.
-    if (splaysToastTime != 0) {
-        if (millis() - splaysToastTime < 1200) {
-            if (now - lastDisplayRefresh >= Timing::DISPLAY_REFRESH_MS) {
-                lastDisplayRefresh = now;
-                auto &d = display.getDisplay();
-                d.clearDisplay();
-                d.setTextColor(SH110X_WHITE);
-                d.setTextSize(2);
-                d.setCursor(0, 44);
-                d.println(F("Splays not"));
-                d.println(F("enabled"));
-                d.display();
-            }
-            return;
-        } else {
-            splaysToastTime = 0;
-        }
-    }
-
-    if (now - lastDisplayRefresh < Timing::DISPLAY_REFRESH_MS) {
-        return;
-    }
-    lastDisplayRefresh = now;
-
-    // Only update live sensor readings when display is not frozen.
-    // After a measurement the display stays frozen showing the shot
-    // reading until the user presses MEASURE again to resume live mode.
-    if (!ctx.displayFrozen) {
-        float liveAz, liveInc;
-        if (calOk) {
-            liveAz = sensorMgr.getAzimuth();
-            liveInc = sensorMgr.getInclination();
-        } else {
-            liveAz = wrapTo360(radiansToDegrees(atan2f(lastMagY, lastMagX)));
-            liveInc = radiansToDegrees(atan2f(lastAccZ, sqrtf(lastAccX * lastAccX + lastAccY * lastAccY)));
-        }
-
-        // Live update with a small deadband against last-digit flicker.
-        // V1's motion-gated freeze + anchor clamp (which hid the noisy
-        // ISM330DHCX by locking the display to ±0.1° once still) is gone —
-        // the SCA3300/RM3100 EMA output is steady enough to show live, and
-        // the clamp could mask slow re-aims below the motion threshold.
-        if (circularDiff(liveAz, dispAz) > DEADBAND_ANGLE) {
-            dispAz = liveAz;
-        }
-        if (fabsf(liveInc - dispInc) > DEADBAND_ANGLE) {
-            dispInc = liveInc;
-        }
-
-        display.updateSensorReadings(lastDistance, dispAz, dispInc);
-
-        // Teleplot output ('s' in the serial monitor silences/resumes)
-        if (teleplotEnabled) {
-            Serial.print(F(">azimuth:"));
-            Serial.println(dispAz, 1);
-            Serial.print(F(">inclination:"));
-            Serial.println(dispInc, 1);
-        }
-    }
-
-    display.updateBattery(lastBatPct);
-    display.updateBTLabel(bleOk ? ble.isConnected() : false);
-    display.refresh();
+  display.updateBattery(lastBatPct);
+  display.updateBTLabel(bleOk ? ble.isConnected() : false);
+  display.refresh();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1467,33 +1485,33 @@ static void updateDisplay(uint32_t now) {
 // ═══════════════════════════════════════════════════════════════════
 
 static void resetLaser() {
-    if (!laserOk) {
-        return;
-    }
-    Serial.println(F("LASER: resetting"));
-    laser.setLaser(false);
-    delay(100);
-    while (Serial1.available()) {
-        Serial1.read(); // flush UART
-    }
-    laser.setLaser(true);
-    delay(200); // let module stabilise
-    ctx.laserEnabled = true;
+  if (!laserOk) {
+    return;
+  }
+  Serial.println(F("LASER: resetting"));
+  laser.setLaser(false);
+  delay(100);
+  while (Serial1.available()) {
+    Serial1.read(); // flush UART
+  }
+  laser.setLaser(true);
+  delay(200); // let module stabilise
+  ctx.laserEnabled = true;
 }
 
 static void doShutdown() {
-    Serial.println(F(">>> SHUTDOWN"));
-    laserOff();
-    // Flush any unsaved readings to flash before power dies
-    if (flashOk && configMgr.hasPendingToSync()) {
-        configMgr.syncPendingToFlash();
-    }
-    Serial.flush();
-    delay(100); // let the LittleFS write settle before cutting the rail
-    if (dispOk) {
-        display.blankScreen();
-    }
-    power.powerOff(); // KILL LOW — never returns (hangs if USB keeps us alive)
+  Serial.println(F(">>> SHUTDOWN"));
+  laserOff();
+  // Flush any unsaved readings to flash before power dies
+  if (flashOk && configMgr.hasPendingToSync()) {
+    configMgr.syncPendingToFlash();
+  }
+  Serial.flush();
+  delay(100); // let the LittleFS write settle before cutting the rail
+  if (dispOk) {
+    display.blankScreen();
+  }
+  power.powerOff(); // KILL LOW — never returns (hangs if USB keeps us alive)
 }
 
 // Shared power-off hook (declared in config.h) for menu/snake timeout paths
@@ -1507,100 +1525,99 @@ void systemPowerOff() { doShutdown(); }
 // pressed (import + reboot) or the device is powered off (the usb_import
 // flag makes the next boot import instead).
 static void enterUsbDriveMode() {
-    bool fatOk = UsbDrive::mountOrFormat();
-    bool exportOk = fatOk && flashOk && UsbDrive::exportFiles(configMgr);
+  bool fatOk = UsbDrive::mountOrFormat();
+  bool exportOk = fatOk && flashOk && UsbDrive::exportFiles(configMgr);
 
-    // Power-cycle exit must still pick up host edits — flag it before the
-    // host can touch anything.
-    if (flashOk) {
-        configMgr.writeFlag(Flags::USB_IMPORT);
+  // Power-cycle exit must still pick up host edits — flag it before the
+  // host can touch anything.
+  if (flashOk) {
+    configMgr.writeFlag(Flags::USB_IMPORT);
+  }
+  UsbDrive::setHostAccess(true);
+
+  Serial.begin(115200);
+  Serial.println(F("=== USB Drive Mode ==="));
+  if (!fatOk) {
+    Serial.println(F("FAT partition bad — format it (FAT) from the PC"));
+  } else if (!exportOk) {
+    Serial.println(F("WARNING: file staging incomplete"));
+  }
+
+  if (dispOk) {
+    auto &d = display.getDisplay();
+    d.clearDisplay();
+    d.setTextSize(1);
+    d.setTextColor(SH110X_WHITE);
+    d.setCursor(0, 4);
+    d.println(F("USB Drive Mode"));
+    d.println();
+    d.println(F("Edit CONFIG.JSON on"));
+    d.println(F("the MRZAPPY drive."));
+    d.println();
+    d.println(F("Eject, then press"));
+    d.println(F("MENU to save & exit"));
+    d.println(F("(or just power off)."));
+    d.display();
+  }
+
+  // Spin: MENU press exits, power button still powers off cleanly.
+  uint32_t menuLowSince = 0;
+  while (true) {
+    uint32_t now = millis();
+    pollPowerButton(now);
+    if (digitalRead(PIN_BTN_MENU) == LOW) {
+      if (menuLowSince == 0) {
+        menuLowSince = now;
+      } else if (now - menuLowSince >= 50) {
+        break; // debounced MENU press — save & exit
+      }
+    } else {
+      menuLowSince = 0;
     }
-    UsbDrive::setHostAccess(true);
+    delay(10);
+  }
 
-    Serial.begin(115200);
-    Serial.println(F("=== USB Drive Mode ==="));
-    if (!fatOk) {
-        Serial.println(F("FAT partition bad — format it (FAT) from the PC"));
-    } else if (!exportOk) {
-        Serial.println(F("WARNING: file staging incomplete"));
+  // Revoke host access and let any in-flight host write drain before this
+  // task touches the volume (MSC callbacks share the flash page cache).
+  UsbDrive::setHostAccess(false);
+  delay(500);
+
+  Serial.println(F("USB drive closed — importing edits"));
+  bool importOk = flashOk && UsbDrive::importFiles(configMgr);
+  if (flashOk) {
+    configMgr.clearFlag(Flags::USB_IMPORT);
+  }
+
+  if (dispOk) {
+    auto &d = display.getDisplay();
+    d.clearDisplay();
+    d.setTextSize(1);
+    d.setTextColor(SH110X_WHITE);
+    d.setCursor(0, 20);
+    if (importOk) {
+      d.println(F("Settings saved."));
+    } else {
+      d.println(F("Some files invalid -"));
+      d.println(F("old data kept."));
     }
-
-    if (dispOk) {
-        auto &d = display.getDisplay();
-        d.clearDisplay();
-        d.setTextSize(1);
-        d.setTextColor(SH110X_WHITE);
-        d.setCursor(0, 4);
-        d.println(F("USB Drive Mode"));
-        d.println();
-        d.println(F("Edit CONFIG.JSON on"));
-        d.println(F("the MRZAPPY drive."));
-        d.println();
-        d.println(F("Eject, then press"));
-        d.println(F("MENU to save & exit"));
-        d.println(F("(or just power off)."));
-        d.display();
-    }
-
-    // Spin: MENU press exits, power button still powers off cleanly.
-    uint32_t menuLowSince = 0;
-    while (true) {
-        uint32_t now = millis();
-        pollPowerButton(now);
-        if (digitalRead(PIN_BTN_MENU) == LOW) {
-            if (menuLowSince == 0) {
-                menuLowSince = now;
-            } else if (now - menuLowSince >= 50) {
-                break; // debounced MENU press — save & exit
-            }
-        } else {
-            menuLowSince = 0;
-        }
-        delay(10);
-    }
-
-    // Revoke host access and let any in-flight host write drain before this
-    // task touches the volume (MSC callbacks share the flash page cache).
-    UsbDrive::setHostAccess(false);
-    delay(500);
-
-    Serial.println(F("USB drive closed — importing edits"));
-    bool importOk = flashOk && UsbDrive::importFiles(configMgr);
-    if (flashOk) {
-        configMgr.clearFlag(Flags::USB_IMPORT);
-    }
-
-    if (dispOk) {
-        auto &d = display.getDisplay();
-        d.clearDisplay();
-        d.setTextSize(1);
-        d.setTextColor(SH110X_WHITE);
-        d.setCursor(0, 20);
-        if (importOk) {
-            d.println(F("Settings saved."));
-        } else {
-            d.println(F("Some files invalid -"));
-            d.println(F("old data kept."));
-        }
-        d.println();
-        d.println(F("Restarting..."));
-        d.display();
-    }
-    delay(1500);
-    NVIC_SystemReset();
-    // Does not return
+    d.println();
+    d.println(F("Restarting..."));
+    d.display();
+  }
+  delay(1500);
+  NVIC_SystemReset();
+  // Does not return
 }
 
-
 static void onFlushReading(float az, float inc, float dist) {
-    Serial.print(F("FLUSH: az="));
-    Serial.print(az, 1);
-    Serial.print(F(" inc="));
-    Serial.print(inc, 1);
-    Serial.print(F(" dist="));
-    Serial.println(dist, 2);
-    ble.sendSurveyData(az, inc, dist);
-    delay(50); // pacing between BLE sends
+  Serial.print(F("FLUSH: az="));
+  Serial.print(az, 1);
+  Serial.print(F(" inc="));
+  Serial.print(inc, 1);
+  Serial.print(F(" dist="));
+  Serial.println(dist, 2);
+  ble.sendSurveyData(az, inc, dist);
+  delay(50); // pacing between BLE sends
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1608,256 +1625,259 @@ static void onFlushReading(float az, float inc, float dist) {
 // ═══════════════════════════════════════════════════════════════════
 
 static void initPins() {
-    // Power pins (KILL/INT/PGOOD) are configured in power.begin() at the very
-    // top of setup(); buzzer pins in buzzer.begin(); laser UART in initLaser().
-    pinMode(PIN_BTN_FIRE, INPUT_PULLUP);
-    pinMode(PIN_BTN_UP_DISCO, INPUT_PULLUP);
-    pinMode(PIN_BTN_DOWN, INPUT_PULLUP);
-    pinMode(PIN_BTN_MENU, INPUT_PULLUP);
+  // Power pins (KILL/INT/PGOOD) are configured in power.begin() at the very
+  // top of setup(); buzzer pins in buzzer.begin(); laser UART in initLaser().
+  pinMode(PIN_BTN_FIRE, INPUT_PULLUP);
+  pinMode(PIN_BTN_UP_DISCO, INPUT_PULLUP);
+  pinMode(PIN_BTN_DOWN, INPUT_PULLUP);
+  pinMode(PIN_BTN_MENU, INPUT_PULLUP);
 
-    pinMode(PIN_MAG_DRDY, INPUT);
+  pinMode(PIN_MAG_DRDY, INPUT);
 
-    Serial.println(F("Pins initialized."));
+  Serial.println(F("Pins initialized."));
 }
 
 static void scanI2C() {
-    uint8_t count = 0;
-    for (uint8_t addr = 1; addr < 127; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0) {
-            Serial.print(F("  0x"));
-            if (addr < 16) {
-                Serial.print('0');
-            }
-            Serial.print(addr, HEX);
-            if (addr == RM3100_I2C_ADDR) {
-                Serial.print(F(" (RM3100 mag)"));
-            }
-            if (addr == MAX17048_ADDR) {
-                Serial.print(F(" (MAX17048 battery)"));
-            }
-            if (addr == SH1107_ADDR) {
-                Serial.print(F(" (SH1107 OLED)"));
-            }
-            Serial.println();
-            count++;
-        }
+  uint8_t count = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print(F("  0x"));
+      if (addr < 16) {
+        Serial.print('0');
+      }
+      Serial.print(addr, HEX);
+      if (addr == RM3100_I2C_ADDR) {
+        Serial.print(F(" (RM3100 mag)"));
+      }
+      if (addr == MAX17048_ADDR) {
+        Serial.print(F(" (MAX17048 battery)"));
+      }
+      if (addr == SH1107_ADDR) {
+        Serial.print(F(" (SH1107 OLED)"));
+      }
+      Serial.println();
+      count++;
     }
-    Serial.print(F("  Found "));
-    Serial.print(count);
-    Serial.println(F(" device(s)."));
+  }
+  Serial.print(F("  Found "));
+  Serial.print(count);
+  Serial.println(F(" device(s)."));
 }
 
 // initSensors() inlined into setup() for splash progress updates
 
 static void initDisplay() {
-    dispOk = display.begin();
-    Serial.print(F("SH1107:      "));
-    Serial.println(dispOk ? F("OK") : F("FAILED"));
+  dispOk = display.begin();
+  Serial.print(F("SH1107:      "));
+  Serial.println(dispOk ? F("OK") : F("FAILED"));
 
-    // Splash is shown from setup() after initDisplay() returns
+  // Splash is shown from setup() after initDisplay() returns
 
-    Serial.println();
+  Serial.println();
 }
 
 static void initLaser() {
-    // LDJ-100 on Serial1 — V2 pins are not the variant defaults, and the
-    // module's TXD is open drain (RX needs the pull-up).
-    Serial1.setPins(PIN_LASER_RX, PIN_LASER_TX);
-    pinMode(PIN_LASER_RX, INPUT_PULLUP);
-    Serial1.begin(LASER_UART_BAUD_LDJ100);
-    delay(20);
+  // LDJ-100 on Serial1 — V2 pins are not the variant defaults, and the
+  // module's TXD is open drain (RX needs the pull-up).
+  Serial1.setPins(PIN_LASER_RX, PIN_LASER_TX);
+  pinMode(PIN_LASER_RX, INPUT_PULLUP);
+  Serial1.begin(LASER_UART_BAUD_LDJ100);
+  delay(20);
 
-    // Retry the probe instead of a single early ping. On a COLD power-button
-    // boot the laser rail (ENA-gated) comes up with the MCU, and the module
-    // spends its first ~2.5 s in an auto-baud window where it won't answer a
-    // fixed-baud read. A single 20 ms-in ping fails there, latching
-    // laserOk=false for the whole session — the symptom is FIRE only ever
-    // printing "getting ready for a shot" and never measuring. Warm USB-reflash
-    // resets happen to work because the module is already up. ~15 attempts of
-    // (≤300 ms ping + 100 ms) covers the wake-up/auto-baud window (~4-6 s worst
-    // case only when the laser is truly absent; a healthy module answers fast).
-    laserOk = false;
-    for (int attempt = 0; attempt < 15 && !laserOk; attempt++) {
-        laserOk = laser.begin(Serial1);
-        if (!laserOk) {
-            delay(100);
-        }
+  // Retry the probe instead of a single early ping. On a COLD power-button
+  // boot the laser rail (ENA-gated) comes up with the MCU, and the module
+  // spends its first ~2.5 s in an auto-baud window where it won't answer a
+  // fixed-baud read. A single 20 ms-in ping fails there, latching
+  // laserOk=false for the whole session — the symptom is FIRE only ever
+  // printing "getting ready for a shot" and never measuring. Warm USB-reflash
+  // resets happen to work because the module is already up. ~15 attempts of
+  // (≤300 ms ping + 100 ms) covers the wake-up/auto-baud window (~4-6 s worst
+  // case only when the laser is truly absent; a healthy module answers fast).
+  laserOk = false;
+  for (int attempt = 0; attempt < 15 && !laserOk; attempt++) {
+    laserOk = laser.begin(Serial1);
+    if (!laserOk) {
+      delay(100);
     }
-    Serial.print(F("Laser:       "));
-    Serial.println(laserOk ? F("OK (LDJ-100 @ 115200)") : F("FAILED (no response after retries)"));
+  }
+  Serial.print(F("Laser:       "));
+  Serial.println(laserOk ? F("OK (LDJ-100 @ 115200)")
+                         : F("FAILED (no response after retries)"));
 
-    laserOff();
+  laserOff();
 
-    Serial.println();
+  Serial.println();
 }
 
 static void initBle() {
-    // In-process SAP6 BLE stack (replaces the V1 UART bridge to DiscoX).
-    // Must run AFTER initFlash() — the advertised name comes from config.
-    bleOk = ble.begin(ctx.config.bleName);
-    Serial.print(F("BLE (SAP6):  "));
-    Serial.println(bleOk ? F("OK") : F("FAILED"));
+  // In-process SAP6 BLE stack (replaces the V1 UART bridge to DiscoX).
+  // Must run AFTER initFlash() — the advertised name comes from config.
+  bleOk = ble.begin(ctx.config.bleName);
+  Serial.print(F("BLE (SAP6):  "));
+  Serial.println(bleOk ? F("OK") : F("FAILED"));
 
-    Serial.println();
+  Serial.println();
 }
 
 static void initFlash() {
-    flashOk = configMgr.begin();
-    Serial.print(F("Flash/FS:    "));
-    Serial.println(flashOk ? F("OK") : F("FAILED (using defaults)"));
+  flashOk = configMgr.begin();
+  Serial.print(F("Flash/FS:    "));
+  Serial.println(flashOk ? F("OK") : F("FAILED (using defaults)"));
 
-    // Drive mode exited by power-cycle instead of MENU? Import host edits
-    // now, BEFORE loadConfig/initCalibration read the LittleFS copies.
-    if (flashOk && configMgr.hasFlag(Flags::USB_IMPORT)) {
-        configMgr.clearFlag(Flags::USB_IMPORT);
-        Serial.println(F("  ** USB import flag — checking drive for edits"));
-        if (UsbDrive::mountOrFormat()) {
-            UsbDrive::importFiles(configMgr);
-        }
+  // Drive mode exited by power-cycle instead of MENU? Import host edits
+  // now, BEFORE loadConfig/initCalibration read the LittleFS copies.
+  if (flashOk && configMgr.hasFlag(Flags::USB_IMPORT)) {
+    configMgr.clearFlag(Flags::USB_IMPORT);
+    Serial.println(F("  ** USB import flag — checking drive for edits"));
+    if (UsbDrive::mountOrFormat()) {
+      UsbDrive::importFiles(configMgr);
+    }
+  }
+
+  if (flashOk) {
+    if (configMgr.loadConfig(ctx.config)) {
+      Serial.println(F("  Config loaded from flash"));
+    } else {
+      Serial.println(F("  No saved config — writing defaults"));
+      configMgr.saveConfig(ctx.config);
+    }
+    ctx.legChecker.setTolerance(ctx.config.cartesianTolerance);
+    ctx.stabilityChecker.setTolerance(ctx.config.stabilityTolerance);
+
+    if (dispOk) {
+      display.setBrightness(ctx.config.screenBrightness);
     }
 
-    if (flashOk) {
-        if (configMgr.loadConfig(ctx.config)) {
-            Serial.println(F("  Config loaded from flash"));
-        } else {
-            Serial.println(F("  No saved config — writing defaults"));
-            configMgr.saveConfig(ctx.config);
-        }
-        ctx.legChecker.setTolerance(ctx.config.cartesianTolerance);
-        ctx.stabilityChecker.setTolerance(ctx.config.stabilityTolerance);
-
-        if (dispOk) {
-            display.setBrightness(ctx.config.screenBrightness);
-        }
-
-        uint16_t pending = configMgr.countPendingReadings();
-        if (pending > 0) {
-            Serial.print(F("  Pending readings: "));
-            Serial.println(pending);
-            ctx.bleDisconnectionCounter = pending;
-        }
-
-        if (configMgr.hasFlag(Flags::CALIBRATION)) {
-            configMgr.clearFlag(Flags::CALIBRATION);
-            Serial.println(F("  ** Calibration mode flag detected"));
-            enterCalibMode = true;
-        }
-        if (configMgr.hasFlag(Flags::MENU)) {
-            configMgr.clearFlag(Flags::MENU);
-            Serial.println(F("  ** Menu mode flag detected"));
-            enterMenuMode = true;
-        }
-        if (configMgr.hasFlag(Flags::SNAKE)) {
-            configMgr.clearFlag(Flags::SNAKE);
-            Serial.println(F("  ** Snake mode flag detected"));
-            enterSnakeMode = true;
-        }
+    uint16_t pending = configMgr.countPendingReadings();
+    if (pending > 0) {
+      Serial.print(F("  Pending readings: "));
+      Serial.println(pending);
+      ctx.bleDisconnectionCounter = pending;
     }
 
-    Serial.println();
+    if (configMgr.hasFlag(Flags::CALIBRATION)) {
+      configMgr.clearFlag(Flags::CALIBRATION);
+      Serial.println(F("  ** Calibration mode flag detected"));
+      enterCalibMode = true;
+    }
+    if (configMgr.hasFlag(Flags::MENU)) {
+      configMgr.clearFlag(Flags::MENU);
+      Serial.println(F("  ** Menu mode flag detected"));
+      enterMenuMode = true;
+    }
+    if (configMgr.hasFlag(Flags::SNAKE)) {
+      configMgr.clearFlag(Flags::SNAKE);
+      Serial.println(F("  ** Snake mode flag detected"));
+      enterSnakeMode = true;
+    }
+  }
+
+  Serial.println();
 }
 
 static void initCalibration() {
-    Serial.print(F("Calibration: "));
+  Serial.print(F("Calibration: "));
 
-    bool loaded = false;
-    calFromFlash = false;
+  bool loaded = false;
+  calFromFlash = false;
 
-    // 1. Try binary from flash (fastest — no JSON parse)
-    if (flashOk) {
-        MagCal::CalibrationBinary bin;
-        if (configMgr.loadCalibrationBinary(bin)) {
-            loaded = calibration.fromBinary(bin);
-            if (loaded) {
-                calFromFlash = true;
-                Serial.println(F("OK (from binary)"));
-            } else {
-                Serial.println(F("binary file found but CRC/parse failed"));
-            }
-        } else {
-            Serial.println(F("no binary file on flash"));
-        }
-    }
-
-    // 2. Fall back to JSON from flash
-    if (!loaded && flashOk) {
-        char calBuf[2048];
-        size_t calLen = 0;
-        if (configMgr.loadCalibrationJson(calBuf, sizeof(calBuf), calLen)) {
-            loaded = calibration.fromJson(calBuf, calLen);
-            if (loaded) {
-                calFromFlash = true;
-                Serial.println(F("OK (from flash JSON)"));
-            } else {
-                Serial.print(F("JSON parse failed ("));
-                Serial.print(calLen);
-                Serial.println(F(" bytes)"));
-            }
-        } else {
-            Serial.println(F("no JSON file or too large for buffer"));
-        }
-    }
-
-    // 3. Fall back to compiled-in PROGMEM JSON
-    if (!loaded) {
-        loaded = calibration.fromJson(CALIBRATION_JSON, sizeof(CALIBRATION_JSON) - 1);
-        if (loaded) {
-            Serial.println(F("WARNING: using PROGMEM fallback — calibration may be stale!"));
-        }
-    }
-
-    calOk = loaded;
-
-    if (calOk) {
-        Serial.print(F("  Mag axes:  "));
-        Serial.println(calibration.mag().axes().toString());
-        Serial.print(F("  Grav axes: "));
-        Serial.println(calibration.grav().axes().toString());
-        Serial.print(F("  Dip avg:   "));
-        Serial.print(calibration.dipAvg(), 1);
-        Serial.println(F(" deg"));
-
-        sensorMgr.init(&calibration, ctx.config.emaAlphaStable, ctx.config.emaAlphaMoving,
-                       ctx.config.stabilityBufferLength);
-        Serial.print(F("  Filter:    EMA stable="));
-        Serial.print(ctx.config.emaAlphaStable, 2);
-        Serial.print(F(", moving="));
-        Serial.print(ctx.config.emaAlphaMoving, 2);
-        Serial.print(F(", stability buf="));
-        Serial.println(ctx.config.stabilityBufferLength);
-
-        // Warn user if calibration came from PROGMEM (stale compile-time data)
-        if (!calFromFlash && dispOk) {
-            display.blankScreen();
-            auto &disp = display.getDisplay();
-            disp.setTextColor(SH110X_WHITE);
-            disp.setTextSize(2);
-            disp.setCursor(0, 10);
-            disp.println(F("NOT"));
-            disp.println(F("CALIBRATED"));
-            disp.setTextSize(1);
-            disp.println();
-            disp.println(F("Using stale built-in"));
-            disp.println(F("calibration data."));
-            disp.println();
-            disp.println(F("Recalibrate before"));
-            disp.println(F("surveying!"));
-            disp.display();
-            disco.setRed();
-            delay(4000);
-            disco.turnOff();
-        }
+  // 1. Try binary from flash (fastest — no JSON parse)
+  if (flashOk) {
+    MagCal::CalibrationBinary bin;
+    if (configMgr.loadCalibrationBinary(bin)) {
+      loaded = calibration.fromBinary(bin);
+      if (loaded) {
+        calFromFlash = true;
+        Serial.println(F("OK (from binary)"));
+      } else {
+        Serial.println(F("binary file found but CRC/parse failed"));
+      }
     } else {
-        Serial.println(F("FAILED — using raw angles"));
+      Serial.println(F("no binary file on flash"));
     }
+  }
 
-    Serial.println();
+  // 2. Fall back to JSON from flash
+  if (!loaded && flashOk) {
+    char calBuf[2048];
+    size_t calLen = 0;
+    if (configMgr.loadCalibrationJson(calBuf, sizeof(calBuf), calLen)) {
+      loaded = calibration.fromJson(calBuf, calLen);
+      if (loaded) {
+        calFromFlash = true;
+        Serial.println(F("OK (from flash JSON)"));
+      } else {
+        Serial.print(F("JSON parse failed ("));
+        Serial.print(calLen);
+        Serial.println(F(" bytes)"));
+      }
+    } else {
+      Serial.println(F("no JSON file or too large for buffer"));
+    }
+  }
+
+  // 3. Fall back to compiled-in PROGMEM JSON
+  if (!loaded) {
+    loaded =
+        calibration.fromJson(CALIBRATION_JSON, sizeof(CALIBRATION_JSON) - 1);
+    if (loaded) {
+      Serial.println(
+          F("WARNING: using PROGMEM fallback — calibration may be stale!"));
+    }
+  }
+
+  calOk = loaded;
+
+  if (calOk) {
+    Serial.print(F("  Mag axes:  "));
+    Serial.println(calibration.mag().axes().toString());
+    Serial.print(F("  Grav axes: "));
+    Serial.println(calibration.grav().axes().toString());
+    Serial.print(F("  Dip avg:   "));
+    Serial.print(calibration.dipAvg(), 1);
+    Serial.println(F(" deg"));
+
+    sensorMgr.init(&calibration, ctx.config.emaAlphaStable,
+                   ctx.config.emaAlphaMoving, ctx.config.stabilityBufferLength);
+    Serial.print(F("  Filter:    EMA stable="));
+    Serial.print(ctx.config.emaAlphaStable, 2);
+    Serial.print(F(", moving="));
+    Serial.print(ctx.config.emaAlphaMoving, 2);
+    Serial.print(F(", stability buf="));
+    Serial.println(ctx.config.stabilityBufferLength);
+
+    // Warn user if calibration came from PROGMEM (stale compile-time data)
+    if (!calFromFlash && dispOk) {
+      display.blankScreen();
+      auto &disp = display.getDisplay();
+      disp.setTextColor(SH110X_WHITE);
+      disp.setTextSize(2);
+      disp.setCursor(0, 10);
+      disp.println(F("NOT"));
+      disp.println(F("CALIBRATED"));
+      disp.setTextSize(1);
+      disp.println();
+      disp.println(F("Using stale built-in"));
+      disp.println(F("calibration data."));
+      disp.println();
+      disp.println(F("Recalibrate before"));
+      disp.println(F("surveying!"));
+      disp.display();
+      disco.setRed();
+      delay(4000);
+      disco.turnOff();
+    }
+  } else {
+    Serial.println(F("FAILED — using raw angles"));
+  }
+
+  Serial.println();
 }
 
 static void initDisco() {
-    // V2: no power-gate pin — the WS2812 rail is hardware-gated by ENA
-    disco.begin();
-    Serial.println(F("WS2812:      OK"));
-    Serial.println();
+  // V2: no power-gate pin — the WS2812 rail is hardware-gated by ENA
+  disco.begin();
+  Serial.println(F("WS2812:      OK"));
+  Serial.println();
 }

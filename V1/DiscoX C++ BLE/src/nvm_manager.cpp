@@ -15,50 +15,50 @@ using namespace Adafruit_LittleFS_Namespace;
 void nvmInit() { InternalFS.begin(); }
 
 String nvmReadName() {
-    File f = InternalFS.open(NVM_FILENAME, FILE_O_READ);
-    if (!f) {
-        return String(DEFAULT_NAME);
-    }
+  File f = InternalFS.open(NVM_FILENAME, FILE_O_READ);
+  if (!f) {
+    return String(DEFAULT_NAME);
+  }
 
-    uint8_t header[2];
-    if (f.read(header, 2) != 2 || header[0] != NVM_MAGIC) {
-        f.close();
-        return String(DEFAULT_NAME);
-    }
-
-    uint8_t len = header[1];
-    if (len == 0 || len > MAX_NAME_LEN) {
-        f.close();
-        return String(DEFAULT_NAME);
-    }
-
-    char buf[MAX_NAME_LEN + 1];
-    if (f.read(buf, len) != len) {
-        f.close();
-        return String(DEFAULT_NAME);
-    }
+  uint8_t header[2];
+  if (f.read(header, 2) != 2 || header[0] != NVM_MAGIC) {
     f.close();
+    return String(DEFAULT_NAME);
+  }
 
-    buf[len] = '\0';
-    return String(buf);
+  uint8_t len = header[1];
+  if (len == 0 || len > MAX_NAME_LEN) {
+    f.close();
+    return String(DEFAULT_NAME);
+  }
+
+  char buf[MAX_NAME_LEN + 1];
+  if (f.read(buf, len) != len) {
+    f.close();
+    return String(DEFAULT_NAME);
+  }
+  f.close();
+
+  buf[len] = '\0';
+  return String(buf);
 }
 
 bool nvmWriteName(const String &name) {
-    if (name.length() < 1 || name.length() > MAX_NAME_LEN) {
-        return false;
-    }
+  if (name.length() < 1 || name.length() > MAX_NAME_LEN) {
+    return false;
+  }
 
-    // Remove old file first (LittleFS doesn't truncate on open)
-    InternalFS.remove(NVM_FILENAME);
+  // Remove old file first (LittleFS doesn't truncate on open)
+  InternalFS.remove(NVM_FILENAME);
 
-    File f = InternalFS.open(NVM_FILENAME, FILE_O_WRITE);
-    if (!f) {
-        return false;
-    }
+  File f = InternalFS.open(NVM_FILENAME, FILE_O_WRITE);
+  if (!f) {
+    return false;
+  }
 
-    uint8_t header[2] = {NVM_MAGIC, (uint8_t)name.length()};
-    f.write(header, 2);
-    f.write(name.c_str(), name.length());
-    f.close();
-    return true;
+  uint8_t header[2] = {NVM_MAGIC, (uint8_t)name.length()};
+  f.write(header, 2);
+  f.write(name.c_str(), name.length());
+  f.close();
+  return true;
 }

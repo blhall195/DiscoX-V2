@@ -9,75 +9,82 @@ static const uint8_t pinTable[NUM_BUTTONS] = {
 };
 
 static const char *const nameTable[NUM_BUTTONS] = {
-    "Fire", "Up/Disco", "Down", "Menu",
+    "Fire",
+    "Up/Disco",
+    "Down",
+    "Menu",
 };
 
 void ButtonManager::begin() {
-    uint32_t now = millis();
-    for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
-        btn_[i].pin = pinTable[i];
-        btn_[i].debounced = false;
-        btn_[i].previous = false;
-        btn_[i].raw = false;
-        btn_[i].lastChangeTime = now;
-        btn_[i].fell = false;
-        btn_[i].rose = false;
+  uint32_t now = millis();
+  for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+    btn_[i].pin = pinTable[i];
+    btn_[i].debounced = false;
+    btn_[i].previous = false;
+    btn_[i].raw = false;
+    btn_[i].lastChangeTime = now;
+    btn_[i].fell = false;
+    btn_[i].rose = false;
 
-        // Pins are already configured in initPins(), but read initial state
-        bool pressed = (digitalRead(btn_[i].pin) == LOW);
-        btn_[i].debounced = pressed;
-        btn_[i].previous = pressed;
-        btn_[i].raw = pressed;
-    }
+    // Pins are already configured in initPins(), but read initial state
+    bool pressed = (digitalRead(btn_[i].pin) == LOW);
+    btn_[i].debounced = pressed;
+    btn_[i].previous = pressed;
+    btn_[i].raw = pressed;
+  }
 }
 
 void ButtonManager::update() {
-    uint32_t now = millis();
+  uint32_t now = millis();
 
-    for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
-        State &b = btn_[i];
+  for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+    State &b = btn_[i];
 
-        // Save previous debounced state for edge detection
-        b.previous = b.debounced;
+    // Save previous debounced state for edge detection
+    b.previous = b.debounced;
 
-        // Read pin (active LOW — invert so true = pressed)
-        bool reading = (digitalRead(b.pin) == LOW);
+    // Read pin (active LOW — invert so true = pressed)
+    bool reading = (digitalRead(b.pin) == LOW);
 
-        // If raw state changed, reset the debounce timer
-        if (reading != b.raw) {
-            b.raw = reading;
-            b.lastChangeTime = now;
-        }
-
-        // If stable for the debounce interval, accept as new state
-        if ((now - b.lastChangeTime) >= Timing::BUTTON_DEBOUNCE_MS) {
-            b.debounced = b.raw;
-        }
-
-        // Edge flags — sticky until consumed by wasPressed()/wasReleased()
-        if (b.debounced && !b.previous) {
-            b.fell = true; // just pressed
-        }
-        if (!b.debounced && b.previous) {
-            b.rose = true; // just released
-        }
+    // If raw state changed, reset the debounce timer
+    if (reading != b.raw) {
+      b.raw = reading;
+      b.lastChangeTime = now;
     }
+
+    // If stable for the debounce interval, accept as new state
+    if ((now - b.lastChangeTime) >= Timing::BUTTON_DEBOUNCE_MS) {
+      b.debounced = b.raw;
+    }
+
+    // Edge flags — sticky until consumed by wasPressed()/wasReleased()
+    if (b.debounced && !b.previous) {
+      b.fell = true; // just pressed
+    }
+    if (!b.debounced && b.previous) {
+      b.rose = true; // just released
+    }
+  }
 }
 
-bool ButtonManager::isPressed(Button btn) const { return btn_[static_cast<uint8_t>(btn)].debounced; }
+bool ButtonManager::isPressed(Button btn) const {
+  return btn_[static_cast<uint8_t>(btn)].debounced;
+}
 
 bool ButtonManager::wasPressed(Button btn) {
-    State &b = btn_[static_cast<uint8_t>(btn)];
-    bool v = b.fell;
-    b.fell = false;
-    return v;
+  State &b = btn_[static_cast<uint8_t>(btn)];
+  bool v = b.fell;
+  b.fell = false;
+  return v;
 }
 
 bool ButtonManager::wasReleased(Button btn) {
-    State &b = btn_[static_cast<uint8_t>(btn)];
-    bool v = b.rose;
-    b.rose = false;
-    return v;
+  State &b = btn_[static_cast<uint8_t>(btn)];
+  bool v = b.rose;
+  b.rose = false;
+  return v;
 }
 
-const char *ButtonManager::name(Button btn) { return nameTable[static_cast<uint8_t>(btn)]; }
+const char *ButtonManager::name(Button btn) {
+  return nameTable[static_cast<uint8_t>(btn)];
+}

@@ -14,8 +14,8 @@
 #include "pins_v2.h"
 
 struct Button {
-    const char *name;
-    uint8_t pin;
+  const char *name;
+  uint8_t pin;
 };
 
 static const Button BUTTONS[] = {
@@ -33,99 +33,100 @@ static int failCount = 0;
 static bool pressed[NUM_BUTTONS] = {false};
 
 static void report(const char *name, bool ok, const char *detail) {
-    if (ok) {
-        passCount++;
-    } else {
-        failCount++;
-    }
-    Serial.print(ok ? "[PASS] " : "[FAIL] ");
-    Serial.print(name);
-    if (detail && detail[0]) {
-        Serial.print(" — ");
-        Serial.print(detail);
-    }
-    Serial.println();
+  if (ok) {
+    passCount++;
+  } else {
+    failCount++;
+  }
+  Serial.print(ok ? "[PASS] " : "[FAIL] ");
+  Serial.print(name);
+  if (detail && detail[0]) {
+    Serial.print(" — ");
+    Serial.print(detail);
+  }
+  Serial.println();
 }
 
 static void runTests() {
-    char detail[96];
+  char detail[96];
 
-    for (size_t i = 0; i < NUM_BUTTONS; i++) {
-        pinMode(BUTTONS[i].pin, INPUT_PULLUP);
-    }
-    // let the pull-ups settle before sampling
-    delay(5);
+  for (size_t i = 0; i < NUM_BUTTONS; i++) {
+    pinMode(BUTTONS[i].pin, INPUT_PULLUP);
+  }
+  // let the pull-ups settle before sampling
+  delay(5);
 
-    // Each pin must idle HIGH through its pull-up. A LOW here means the button
-    // is being held, or the line is shorted to GND / mis-wired.
-    for (size_t i = 0; i < NUM_BUTTONS; i++) {
-        int level = digitalRead(BUTTONS[i].pin);
-        bool ok = (level == HIGH);
-        snprintf(detail, sizeof(detail), "P-pin %u idles %s",
-                 BUTTONS[i].pin, level == HIGH ? "HIGH (released)" : "LOW (held/short?)");
-        report(BUTTONS[i].name, ok, detail);
-        pressed[i] = (level == LOW);
-    }
+  // Each pin must idle HIGH through its pull-up. A LOW here means the button
+  // is being held, or the line is shorted to GND / mis-wired.
+  for (size_t i = 0; i < NUM_BUTTONS; i++) {
+    int level = digitalRead(BUTTONS[i].pin);
+    bool ok = (level == HIGH);
+    snprintf(detail, sizeof(detail), "P-pin %u idles %s", BUTTONS[i].pin,
+             level == HIGH ? "HIGH (released)" : "LOW (held/short?)");
+    report(BUTTONS[i].name, ok, detail);
+    pressed[i] = (level == LOW);
+  }
 
-    Serial.println();
-    Serial.print("Result: ");
-    Serial.print(passCount);
-    Serial.print(" passed, ");
-    Serial.print(failCount);
-    Serial.println(" failed");
-    Serial.println(">>> Button pull-up checks done — CONFIRM WIRING BY PRESSING <<<");
-    Serial.println();
-    Serial.println("Live mode: press each button; it should report by name.");
-    Serial.println("Send any character to re-run the boot self-test.");
-    Serial.println();
+  Serial.println();
+  Serial.print("Result: ");
+  Serial.print(passCount);
+  Serial.print(" passed, ");
+  Serial.print(failCount);
+  Serial.println(" failed");
+  Serial.println(
+      ">>> Button pull-up checks done — CONFIRM WIRING BY PRESSING <<<");
+  Serial.println();
+  Serial.println("Live mode: press each button; it should report by name.");
+  Serial.println("Send any character to re-run the boot self-test.");
+  Serial.println();
 }
 
 // Poll all buttons; print on any debounced edge. Simple 20 ms hold debounce.
 static void pollButtons() {
-    static uint32_t lastChange[NUM_BUTTONS] = {0};
-    static bool rawLast[NUM_BUTTONS] = {false};
+  static uint32_t lastChange[NUM_BUTTONS] = {0};
+  static bool rawLast[NUM_BUTTONS] = {false};
 
-    for (size_t i = 0; i < NUM_BUTTONS; i++) {
-        bool rawPressed = (digitalRead(BUTTONS[i].pin) == LOW);
-        if (rawPressed != rawLast[i]) {
-            rawLast[i] = rawPressed;
-            lastChange[i] = millis();
-        } else if (rawPressed != pressed[i] && millis() - lastChange[i] >= 20) {
-            pressed[i] = rawPressed;
-            Serial.print("  ");
-            Serial.print(BUTTONS[i].name);
-            Serial.println(rawPressed ? " pressed" : " released");
-        }
+  for (size_t i = 0; i < NUM_BUTTONS; i++) {
+    bool rawPressed = (digitalRead(BUTTONS[i].pin) == LOW);
+    if (rawPressed != rawLast[i]) {
+      rawLast[i] = rawPressed;
+      lastChange[i] = millis();
+    } else if (rawPressed != pressed[i] && millis() - lastChange[i] >= 20) {
+      pressed[i] = rawPressed;
+      Serial.print("  ");
+      Serial.print(BUTTONS[i].name);
+      Serial.println(rawPressed ? " pressed" : " released");
     }
+  }
 }
 
 void setup() {
-    Serial.begin(115200);
-    uint32_t start = millis();
-    while (!Serial && millis() - start < 5000) {
-        delay(10); // wait for USB host, but don't block forever
-    }
+  Serial.begin(115200);
+  uint32_t start = millis();
+  while (!Serial && millis() - start < 5000) {
+    delay(10); // wait for USB host, but don't block forever
+  }
 
-    Serial.println();
-    Serial.println("=== Mr Zappy PCB V2 — buttons 1-4 test ===");
-    Serial.println();
+  Serial.println();
+  Serial.println("=== Mr Zappy PCB V2 — buttons 1-4 test ===");
+  Serial.println();
 
-    runTests();
+  runTests();
 }
 
 void loop() {
-    // Any keypress re-runs the full test sequence
-    if (Serial.available()) {
-        while (Serial.available()) {
-            Serial.read();
-        }
-        passCount = failCount = 0;
-        Serial.println();
-        Serial.println("--- re-running test sequence ---");
-        runTests();
-        return;
+  // Any keypress re-runs the full test sequence
+  if (Serial.available()) {
+    while (Serial.available()) {
+      Serial.read();
     }
+    passCount = failCount = 0;
+    Serial.println();
+    Serial.println("--- re-running test sequence ---");
+    runTests();
+    return;
+  }
 
-    pollButtons();
-    delay(2);
+  pollButtons();
+  delay(2);
 }

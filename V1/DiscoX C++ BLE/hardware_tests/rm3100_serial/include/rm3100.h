@@ -4,35 +4,36 @@
 #include <Wire.h>
 
 class RM3100 {
-  public:
-    struct Reading {
-        int32_t x, y, z;
-    };
+public:
+  struct Reading {
+    int32_t x, y, z;
+  };
 
-    bool begin(TwoWire &wire, uint8_t addr, uint16_t cycleCount, int8_t drdyPin = -1);
+  bool begin(TwoWire &wire, uint8_t addr, uint16_t cycleCount,
+             int8_t drdyPin = -1);
 
-    void startSingleReading();
-    void startContinuousReading(float frequency = 300.0f);
-    void stop();
+  void startSingleReading();
+  void startContinuousReading(float frequency = 300.0f);
+  void stop();
 
-    bool measurementComplete() const;
-    Reading getLastReading();
-    float measurementTime() const;
+  bool measurementComplete() const;
+  Reading getLastReading();
+  float measurementTime() const;
 
-    Reading readSingle();
-    void toMicroTesla(const Reading &raw, float &ux, float &uy, float &uz) const;
+  Reading readSingle();
+  void toMicroTesla(const Reading &raw, float &ux, float &uy, float &uz) const;
 
-  private:
-    void writeReg(uint8_t reg, const uint8_t *data, uint8_t len);
-    void readReg(uint8_t reg, uint8_t *buf, uint8_t len);
-    uint8_t readReg8(uint8_t reg);
+private:
+  void writeReg(uint8_t reg, const uint8_t *data, uint8_t len);
+  void readReg(uint8_t reg, uint8_t *buf, uint8_t len);
+  uint8_t readReg8(uint8_t reg);
 
-    TwoWire *wire_ = nullptr;
-    uint8_t addr_ = 0x20;
-    uint16_t cycleCount_ = 200;
-    int8_t drdyPin_ = -1;
-    bool continuous_ = false;
+  TwoWire *wire_ = nullptr;
+  uint8_t addr_ = 0x20;
+  uint16_t cycleCount_ = 200;
+  int8_t drdyPin_ = -1;
+  bool continuous_ = false;
 
-    static constexpr float CYCLE_DURATION = 0.000036f;
-    static constexpr float UT_PER_CYCLE = 2.5f;
+  static constexpr float CYCLE_DURATION = 0.000036f;
+  static constexpr float UT_PER_CYCLE = 2.5f;
 };

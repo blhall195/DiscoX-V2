@@ -16,101 +16,101 @@ constexpr const char *SNAKE = "snake";
 } // namespace Flags
 
 class ConfigManager {
-  public:
-    // Initialize QSPI flash and mount FAT filesystem.
-    // Returns false if flash init or mount fails (device runs with defaults).
-    bool begin();
+public:
+  // Initialize QSPI flash and mount FAT filesystem.
+  // Returns false if flash init or mount fails (device runs with defaults).
+  bool begin();
 
-    bool isReady() const { return mounted_; }
+  bool isReady() const { return mounted_; }
 
-    // True if filesystem was auto-reformatted this boot (data was lost)
-    bool wasReformatted() const { return reformatted_; }
+  // True if filesystem was auto-reformatted this boot (data was lost)
+  bool wasReformatted() const { return reformatted_; }
 
-    // Expose the internal QSPI flash object (for USB MSC block callbacks)
-    Adafruit_SPIFlash *getFlash();
+  // Expose the internal QSPI flash object (for USB MSC block callbacks)
+  Adafruit_SPIFlash *getFlash();
 
-    // ── Settings persistence ────────────────────────────────────────
+  // ── Settings persistence ────────────────────────────────────────
 
-    // Load config from /config.json. Returns false if missing/corrupt.
-    // On failure, cfg is left unchanged (caller uses defaults).
-    bool loadConfig(Config &cfg);
+  // Load config from /config.json. Returns false if missing/corrupt.
+  // On failure, cfg is left unchanged (caller uses defaults).
+  bool loadConfig(Config &cfg);
 
-    // Save config to /config.json. Returns false on write failure.
-    bool saveConfig(const Config &cfg);
+  // Save config to /config.json. Returns false on write failure.
+  bool saveConfig(const Config &cfg);
 
-    // ── Calibration data ────────────────────────────────────────────
+  // ── Calibration data ────────────────────────────────────────────
 
-    // Load calibration JSON into caller-provided buffer.
-    // Buffer is null-terminated on success. bytesRead excludes the null.
-    bool loadCalibrationJson(char *buf, size_t bufSize, size_t &bytesRead);
+  // Load calibration JSON into caller-provided buffer.
+  // Buffer is null-terminated on success. bytesRead excludes the null.
+  bool loadCalibrationJson(char *buf, size_t bufSize, size_t &bytesRead);
 
-    // Save calibration JSON string to /calibration.json.
-    bool saveCalibrationJson(const char *json, size_t len);
+  // Save calibration JSON string to /calibration.json.
+  bool saveCalibrationJson(const char *json, size_t len);
 
-    // Load calibration binary from /calibration.bin.
-    bool loadCalibrationBinary(MagCal::CalibrationBinary &out);
+  // Load calibration binary from /calibration.bin.
+  bool loadCalibrationBinary(MagCal::CalibrationBinary &out);
 
-    // Save calibration binary to /calibration.bin.
-    bool saveCalibrationBinary(const MagCal::CalibrationBinary &data);
+  // Save calibration binary to /calibration.bin.
+  bool saveCalibrationBinary(const MagCal::CalibrationBinary &data);
 
-    // ── Calibration quality metrics ───────────────────────────────────
+  // ── Calibration quality metrics ───────────────────────────────────
 
-    struct CalMetrics {
-        float mag;
-        float grav;
-        float accuracy;
-    };
+  struct CalMetrics {
+    float mag;
+    float grav;
+    float accuracy;
+  };
 
-    // Save calibration quality metrics to /cal_metrics.bin.
-    bool saveCalMetrics(const CalMetrics &m);
+  // Save calibration quality metrics to /cal_metrics.bin.
+  bool saveCalMetrics(const CalMetrics &m);
 
-    // Load calibration quality metrics from /cal_metrics.bin.
-    bool loadCalMetrics(CalMetrics &m);
+  // Load calibration quality metrics from /cal_metrics.bin.
+  bool loadCalMetrics(CalMetrics &m);
 
-    // ── Pending readings (offline queue) ────────────────────────────
+  // ── Pending readings (offline queue) ────────────────────────────
 
-    // Buffer a reading in RAM (fast, no flash I/O).
-    bool appendPendingReading(float az, float inc, float dist);
+  // Buffer a reading in RAM (fast, no flash I/O).
+  bool appendPendingReading(float az, float inc, float dist);
 
-    // Write any RAM-buffered readings to flash. Call from main loop
-    // during idle — QSPI writes crash if done mid-measurement.
-    // Also call from doShutdown() before pulling power pin.
-    bool syncPendingToFlash();
+  // Write any RAM-buffered readings to flash. Call from main loop
+  // during idle — QSPI writes crash if done mid-measurement.
+  // Also call from doShutdown() before pulling power pin.
+  bool syncPendingToFlash();
 
-    // True if RAM buffer has unsaved readings.
-    bool hasPendingToSync() const { return pendingBufCount_ > 0; }
+  // True if RAM buffer has unsaved readings.
+  bool hasPendingToSync() const { return pendingBufCount_ > 0; }
 
-    // Count lines in /pending.txt + RAM buffer.
-    uint16_t countPendingReadings();
+  // Count lines in /pending.txt + RAM buffer.
+  uint16_t countPendingReadings();
 
-    // Read each line from flash, parse, call callback. Returns false on IO error.
-    bool flushPendingReadings(void (*callback)(float az, float inc, float dist));
+  // Read each line from flash, parse, call callback. Returns false on IO error.
+  bool flushPendingReadings(void (*callback)(float az, float inc, float dist));
 
-    // Delete /pending.txt and clear RAM buffer.
-    bool clearPendingReadings();
+  // Delete /pending.txt and clear RAM buffer.
+  bool clearPendingReadings();
 
-    // ── Flag files (boot mode triggers) ─────────────────────────────
+  // ── Flag files (boot mode triggers) ─────────────────────────────
 
-    // Create /flags/<name> (empty file).
-    bool writeFlag(const char *name);
+  // Create /flags/<name> (empty file).
+  bool writeFlag(const char *name);
 
-    // Check if /flags/<name> exists.
-    bool hasFlag(const char *name);
+  // Check if /flags/<name> exists.
+  bool hasFlag(const char *name);
 
-    // Delete /flags/<name>.
-    bool clearFlag(const char *name);
+  // Delete /flags/<name>.
+  bool clearFlag(const char *name);
 
-  private:
-    bool mounted_ = false;
-    bool reformatted_ = false; // set if FAT was auto-reformatted this boot
+private:
+  bool mounted_ = false;
+  bool reformatted_ = false; // set if FAT was auto-reformatted this boot
 
-    // RAM buffer for pending readings (avoids QSPI writes mid-measurement)
-    static const uint8_t MAX_PENDING_BUF = 20;
-    struct PendingEntry {
-        float az, inc, dist;
-    };
-    PendingEntry pendingBuf_[MAX_PENDING_BUF];
-    uint8_t pendingBufCount_ = 0;
+  // RAM buffer for pending readings (avoids QSPI writes mid-measurement)
+  static const uint8_t MAX_PENDING_BUF = 20;
+  struct PendingEntry {
+    float az, inc, dist;
+  };
+  PendingEntry pendingBuf_[MAX_PENDING_BUF];
+  uint8_t pendingBufCount_ = 0;
 
-    void buildFlagPath(const char *name, char *path, size_t pathSize);
+  void buildFlagPath(const char *name, char *path, size_t pathSize);
 };

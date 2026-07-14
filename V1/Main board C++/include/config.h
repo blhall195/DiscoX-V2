@@ -4,8 +4,9 @@
 #include <Arduino.h>
 
 // ── Button pins (all active LOW with internal pull-ups) ─────────────
-constexpr uint8_t PIN_BTN_MEASURE = A3;  // Button 1 — take measurement
-constexpr uint8_t PIN_BTN_DISCO = A4;    // Button 2 — quick shot / hold 3s for disco
+constexpr uint8_t PIN_BTN_MEASURE = A3; // Button 1 — take measurement
+constexpr uint8_t PIN_BTN_DISCO =
+    A4; // Button 2 — quick shot / hold 3s for disco
 constexpr uint8_t PIN_BTN_CALIB = A0;    // Button 3 — hold for calibration menu
 constexpr uint8_t PIN_BTN_SHUTDOWN = A1; // Button 4 — power off
 constexpr uint8_t PIN_BTN_FIRE = 4;      // D4 — fire/trigger button
@@ -51,5 +52,6 @@ constexpr char MAG_AXES[] = "-X-Y-Z";
 constexpr char GRAV_AXES[] = "-Y-X+Z";
 
 // ── Sensor fusion constants ─────────────────────────────────────────
-// (Complementary gravity filter params are in sensor_manager.h as class constants)
-// EMA alpha and stability buffer length come from Defaults:: (defaults.h)
+// (Complementary gravity filter params are in sensor_manager.h as class
+// constants) EMA alpha and stability buffer length come from Defaults::
+// (defaults.h)

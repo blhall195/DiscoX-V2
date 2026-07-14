@@ -40,126 +40,128 @@ static int failCount = 0;
 static bool armed = false;
 
 static void report(const char *name, bool ok, const char *detail) {
-    if (ok) {
-        passCount++;
-    } else {
-        failCount++;
-    }
-    Serial.print(ok ? "[PASS] " : "[FAIL] ");
-    Serial.print(name);
-    if (detail && detail[0]) {
-        Serial.print(" — ");
-        Serial.print(detail);
-    }
-    Serial.println();
+  if (ok) {
+    passCount++;
+  } else {
+    failCount++;
+  }
+  Serial.print(ok ? "[PASS] " : "[FAIL] ");
+  Serial.print(name);
+  if (detail && detail[0]) {
+    Serial.print(" — ");
+    Serial.print(detail);
+  }
+  Serial.println();
 }
 
 static void runTests() {
-    char detail[96];
+  char detail[96];
 
-    power.begin(PIN_KILL, PIN_PB_INT, PIN_PGOOD);
-    buzzer.begin(PIN_BUZZER_A, PIN_BUZZER_B);
-    delay(5); // let the pullups settle before sampling
+  power.begin(PIN_KILL, PIN_PB_INT, PIN_PGOOD);
+  buzzer.begin(PIN_BUZZER_A, PIN_BUZZER_B);
+  delay(5); // let the pullups settle before sampling
 
-    // 1. INT must idle HIGH — the button is released. This also arms shutdown:
-    //    if it's LOW here (still held from power-on), we stay disarmed.
-    bool intHigh = (digitalRead(PIN_PB_INT) == HIGH);
-    snprintf(detail, sizeof(detail), "INT P0.06 %s",
-             intHigh ? "HIGH (released)" : "LOW (still held / shorted?)");
-    report("INT idles HIGH", intHigh, detail);
-    armed = intHigh;
+  // 1. INT must idle HIGH — the button is released. This also arms shutdown:
+  //    if it's LOW here (still held from power-on), we stay disarmed.
+  bool intHigh = (digitalRead(PIN_PB_INT) == HIGH);
+  snprintf(detail, sizeof(detail), "INT P0.06 %s",
+           intHigh ? "HIGH (released)" : "LOW (still held / shorted?)");
+  report("INT idles HIGH", intHigh, detail);
+  armed = intHigh;
 
-    // 2. KILL must idle HIGH via its external pullup while our GPIO is high-Z.
-    //    A LOW here means the pullup is missing or KILL is shorted — the board
-    //    would never stay powered.
-    bool killHigh = (digitalRead(PIN_KILL) == HIGH);
-    snprintf(detail, sizeof(detail), "KILL P0.04 %s (high-Z, pull-up holds rail on)",
-             killHigh ? "HIGH" : "LOW (no pull-up / short?)");
-    report("KILL idles HIGH", killHigh, detail);
+  // 2. KILL must idle HIGH via its external pullup while our GPIO is high-Z.
+  //    A LOW here means the pullup is missing or KILL is shorted — the board
+  //    would never stay powered.
+  bool killHigh = (digitalRead(PIN_KILL) == HIGH);
+  snprintf(detail, sizeof(detail),
+           "KILL P0.04 %s (high-Z, pull-up holds rail on)",
+           killHigh ? "HIGH" : "LOW (no pull-up / short?)");
+  report("KILL idles HIGH", killHigh, detail);
 
-    // Charger power-good is informational (depends on USB being plugged in).
-    bool pg = power.powerGood();
-    Serial.print("[info] PGOOD P0.13 ");
-    Serial.println(pg ? "LOW — USB input present (charging source good)"
-                      : "HIGH — no USB input (running on battery)");
+  // Charger power-good is informational (depends on USB being plugged in).
+  bool pg = power.powerGood();
+  Serial.print("[info] PGOOD P0.13 ");
+  Serial.println(pg ? "LOW — USB input present (charging source good)"
+                    : "HIGH — no USB input (running on battery)");
 
-    Serial.println();
-    Serial.print("Result: ");
-    Serial.print(passCount);
-    Serial.print(" passed, ");
-    Serial.print(failCount);
-    Serial.println(" failed");
-    Serial.println(">>> Power-off is LIVE <<<");
-    Serial.println("Press the power button to power OFF (beep confirms, then rails drop).");
-    if (!armed) {
-        Serial.println("(shutdown disarmed until the button is released once)");
-    }
-    Serial.println("Send any character to re-run the self-test.");
-    Serial.println();
+  Serial.println();
+  Serial.print("Result: ");
+  Serial.print(passCount);
+  Serial.print(" passed, ");
+  Serial.print(failCount);
+  Serial.println(" failed");
+  Serial.println(">>> Power-off is LIVE <<<");
+  Serial.println(
+      "Press the power button to power OFF (beep confirms, then rails drop).");
+  if (!armed) {
+    Serial.println("(shutdown disarmed until the button is released once)");
+  }
+  Serial.println("Send any character to re-run the self-test.");
+  Serial.println();
 }
 
 // Monitor the power button: on an armed INT LOW edge (confirmed for
 // INT_CONFIRM_MS so noise can't trigger it), power the device off.
 static void pollPower() {
-    bool down = power.buttonPressed(); // INT LOW == pressed
+  bool down = power.buttonPressed(); // INT LOW == pressed
 
-    if (!armed) {
-        // Wait for the power-on press to be released before allowing shutdown.
-        if (!down) {
-            armed = true;
-            Serial.println("  power button released — shutdown armed");
-        }
-        return;
-    }
-
+  if (!armed) {
+    // Wait for the power-on press to be released before allowing shutdown.
     if (!down) {
-        return;
+      armed = true;
+      Serial.println("  power button released — shutdown armed");
     }
+    return;
+  }
 
-    // Confirm the LOW isn't a glitch. INT's minimum assertion is well above
-    // 20 ms, so a real press always passes; if it deasserts mid-confirm we
-    // still honour it as a press only if it stayed LOW the whole window.
-    uint32_t start = millis();
-    while (millis() - start < INT_CONFIRM_MS) {
-        if (!power.buttonPressed()) {
-            return; // glitch — ignore
-        }
-        delay(1);
+  if (!down) {
+    return;
+  }
+
+  // Confirm the LOW isn't a glitch. INT's minimum assertion is well above
+  // 20 ms, so a real press always passes; if it deasserts mid-confirm we
+  // still honour it as a press only if it stayed LOW the whole window.
+  uint32_t start = millis();
+  while (millis() - start < INT_CONFIRM_MS) {
+    if (!power.buttonPressed()) {
+      return; // glitch — ignore
     }
+    delay(1);
+  }
 
-    Serial.println("  power button pressed — powering off");
-    Serial.flush();
-    buzzer.beep(200);  // audible confirmation the shutdown path ran
-    power.powerOff();  // asserts KILL LOW — never returns
+  Serial.println("  power button pressed — powering off");
+  Serial.flush();
+  buzzer.beep(200); // audible confirmation the shutdown path ran
+  power.powerOff(); // asserts KILL LOW — never returns
 }
 
 void setup() {
-    Serial.begin(115200);
-    uint32_t start = millis();
-    while (!Serial && millis() - start < 5000) {
-        delay(10); // wait for USB host, but don't block forever
-    }
+  Serial.begin(115200);
+  uint32_t start = millis();
+  while (!Serial && millis() - start < 5000) {
+    delay(10); // wait for USB host, but don't block forever
+  }
 
-    Serial.println();
-    Serial.println("=== Mr Zappy PCB V2 — power management test ===");
-    Serial.println();
+  Serial.println();
+  Serial.println("=== Mr Zappy PCB V2 — power management test ===");
+  Serial.println();
 
-    runTests();
+  runTests();
 }
 
 void loop() {
-    // Any keypress re-runs the self-test (never powers off — that's button-only)
-    if (Serial.available()) {
-        while (Serial.available()) {
-            Serial.read();
-        }
-        passCount = failCount = 0;
-        Serial.println();
-        Serial.println("--- re-running test sequence ---");
-        runTests();
-        return;
+  // Any keypress re-runs the self-test (never powers off — that's button-only)
+  if (Serial.available()) {
+    while (Serial.available()) {
+      Serial.read();
     }
+    passCount = failCount = 0;
+    Serial.println();
+    Serial.println("--- re-running test sequence ---");
+    runTests();
+    return;
+  }
 
-    pollPower();
-    delay(5);
+  pollPower();
+  delay(5);
 }

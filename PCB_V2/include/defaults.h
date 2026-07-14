@@ -10,35 +10,47 @@ constexpr bool anomalyDetection = true;
 constexpr float stabilityTolerance = 0.5f;    // degrees
 constexpr float quickShotStabilityTol = 8.0f; // degrees (wider for splay shots)
 constexpr uint8_t stabilityBufferLength = 5;
-constexpr float emaAlphaStable = 0.15f;         // stationary alpha — lightened for the low-noise
-                                                // SCA3300/RM3100 (V1's noisy IMU needed 0.05)
-constexpr float emaAlphaMoving = 0.6f;          // high alpha when moving (responsive)
-constexpr float emaJumpThreshold = 8.0f;        // degrees — snap EMA when error exceeds this
+constexpr float emaAlphaStable =
+    0.15f; // stationary alpha — lightened for the low-noise
+           // SCA3300/RM3100 (V1's noisy IMU needed 0.05)
+constexpr float emaAlphaMoving = 0.6f; // high alpha when moving (responsive)
+constexpr float emaJumpThreshold =
+    8.0f; // degrees — snap EMA when error exceeds this
 constexpr float legAngleTolerance = 1.7f;       // degrees
 constexpr float cartesianTolerance = 10.0f;     // cm (BCRA grade 5)
 constexpr float cartesianToleranceMin = 1.0f;   // cm
 constexpr float cartesianToleranceMax = 200.0f; // cm
-constexpr float laserDistanceOffset = 0.162f;   // meters added when measuring from back
-constexpr float laserFrontOffset = 0.03f;       // meters subtracted when measuring from front
-constexpr float calMagConsistency = 0.5f;  // degrees (angular consistency window for mag)
-constexpr float calGravConsistency = 0.4f; // degrees (angular consistency window for gravity)
-constexpr uint8_t calBufferLength = 5;     // samples for calibration consistency window
-constexpr uint16_t calSettleMs = 250;      // ms device must stay stable before accepting
-constexpr float calEmaAlpha = 0.3f;        // EMA pre-filter (lower = smoother, 0.3 = ~3 sample lag)
-constexpr uint16_t calTimeoutMs = 4000;    // ms max wait for stability before forcing acceptance
+constexpr float laserDistanceOffset =
+    0.162f; // meters added when measuring from back
+constexpr float laserFrontOffset =
+    0.03f; // meters subtracted when measuring from front
+constexpr float calMagConsistency =
+    0.5f; // degrees (angular consistency window for mag)
+constexpr float calGravConsistency =
+    0.4f; // degrees (angular consistency window for gravity)
+constexpr uint8_t calBufferLength =
+    5; // samples for calibration consistency window
+constexpr uint16_t calSettleMs =
+    250; // ms device must stay stable before accepting
+constexpr float calEmaAlpha =
+    0.3f; // EMA pre-filter (lower = smoother, 0.3 = ~3 sample lag)
+constexpr uint16_t calTimeoutMs =
+    4000; // ms max wait for stability before forcing acceptance
 constexpr uint32_t autoShutdownTimeout = 1800; // seconds (30 min)
 constexpr uint32_t laserTimeout = 120;         // seconds (2 min)
 constexpr bool laserWibble = true;             // blink laser on leg detect
-constexpr bool measureFromFront = false;       // false = Back (add offset), true = Front (raw laser)
-constexpr bool splaysEnabled = false;          // enable splay shots on button 2 short press
-constexpr uint8_t screenBrightness = 255;      // OLED contrast 0-255
+constexpr bool measureFromFront =
+    false; // false = Back (add offset), true = Front (raw laser)
+constexpr bool splaysEnabled =
+    false; // enable splay shots on button 2 short press
+constexpr uint8_t screenBrightness = 255; // OLED contrast 0-255
 constexpr char bleName[] = "SAP6_DiscoX";
 constexpr uint8_t bleNameMaxLen = 20; // max chars for BLE name
 } // namespace Defaults
 
 namespace Timing {
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 10;
-constexpr uint32_t SENSOR_POLL_MS = 10;          // ~90 Hz (matches RM3100 CC300 rate)
+constexpr uint32_t SENSOR_POLL_MS = 10; // ~90 Hz (matches RM3100 CC300 rate)
 constexpr uint32_t SENSOR_MEASURE_POLL_MS = 100; // 10 Hz measuring
 constexpr uint32_t BUTTON_POLL_MS = 50;
 constexpr uint32_t BATTERY_CHECK_MS = 30000; // 30 sec

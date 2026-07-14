@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // Pin assignments — Adafruit ItsyBitsy nRF52840 Express
 // ---------------------------------------------------------------------------
-constexpr int PIN_DRDY = 7;          // D7  input  pull-down — master signals data ready
+constexpr int PIN_DRDY = 7; // D7  input  pull-down — master signals data ready
 constexpr int PIN_BLE_CONNECTED = 5; // D5  output — HIGH when BLE connected
 constexpr int PIN_LZR_POWER = A2;    // A2  output — HIGH = laser power on
 
