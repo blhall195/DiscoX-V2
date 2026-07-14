@@ -26,8 +26,10 @@ pio device monitor -b 115200
   to nRF GPIO. `include/pins_v2.h` (copied verbatim from the bring-up
   project) relies on this — **never** switch to an ItsyBitsy-based variant.
 - `pio test -e native` runs the Unity unit tests (button_manager,
-  leg_checker, math_utils) — needs a host g++, which this PC does not have
-  installed; the env is carried over from V1 for machines that do.
+  leg_checker, math_utils) — needs a host C++ compiler. Each test-suite dir
+  has an `arduino_stubs_build.cpp` shim pulling in the shared
+  `test/support/arduino_stubs.cpp` (PlatformIO only compiles sources inside
+  the suite's own folder — without the shim every suite fails to link).
 
 ## Architecture (what changed from V1)
 
