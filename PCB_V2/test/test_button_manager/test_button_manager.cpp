@@ -44,13 +44,12 @@ void test_press_debounce_and_edge() {
     buttons.begin();
 
     testSetMillis(0);
-    setButtonState(Button::FIRE, HIGH);
+    setButtonState(Button::FIRE, LOW);
     buttons.update();
     TEST_ASSERT_FALSE(buttons.isPressed(Button::FIRE));
     TEST_ASSERT_FALSE(buttons.wasPressed(Button::FIRE));
 
     testSetMillis(Timing::BUTTON_DEBOUNCE_MS - 1);
-    setButtonState(Button::FIRE, LOW);
     buttons.update();
     TEST_ASSERT_FALSE(buttons.isPressed(Button::FIRE));
     TEST_ASSERT_FALSE(buttons.wasPressed(Button::FIRE));
@@ -68,11 +67,11 @@ void test_release_debounce_and_edge() {
     buttons.begin();
 
     testSetMillis(0);
+    setButtonState(Button::UP_DISCO, HIGH);
     buttons.update();
     TEST_ASSERT_TRUE(buttons.isPressed(Button::UP_DISCO));
 
     testSetMillis(Timing::BUTTON_DEBOUNCE_MS - 1);
-    setButtonState(Button::UP_DISCO, HIGH);
     buttons.update();
     TEST_ASSERT_TRUE(buttons.isPressed(Button::UP_DISCO));
     TEST_ASSERT_FALSE(buttons.wasReleased(Button::UP_DISCO));
@@ -82,6 +81,55 @@ void test_release_debounce_and_edge() {
     TEST_ASSERT_FALSE(buttons.isPressed(Button::UP_DISCO));
     TEST_ASSERT_TRUE(buttons.wasReleased(Button::UP_DISCO));
     TEST_ASSERT_FALSE(buttons.wasReleased(Button::UP_DISCO));
+}
+
+void test_glitch_shorter_than_window_ignored() {
+    ButtonManager buttons;
+    buttons.begin();
+
+    // 3 ms LOW glitch (contact bounce) — must never register as a press
+    testSetMillis(0);
+    setButtonState(Button::FIRE, LOW);
+    buttons.update();
+
+    testSetMillis(3);
+    setButtonState(Button::FIRE, HIGH);
+    buttons.update();
+
+    testSetMillis(3 + Timing::BUTTON_DEBOUNCE_MS);
+    buttons.update();
+    TEST_ASSERT_FALSE(buttons.isPressed(Button::FIRE));
+    TEST_ASSERT_FALSE(buttons.wasPressed(Button::FIRE));
+    TEST_ASSERT_FALSE(buttons.wasReleased(Button::FIRE));
+}
+
+void test_bounce_restarts_debounce_window() {
+    ButtonManager buttons;
+    buttons.begin();
+
+    // Press with bounce: LOW at 0, HIGH at 5, LOW again at 8 —
+    // window restarts at 8, so acceptance is at 8 + DEBOUNCE, not earlier
+    testSetMillis(0);
+    setButtonState(Button::FIRE, LOW);
+    buttons.update();
+
+    testSetMillis(5);
+    setButtonState(Button::FIRE, HIGH);
+    buttons.update();
+
+    testSetMillis(8);
+    setButtonState(Button::FIRE, LOW);
+    buttons.update();
+
+    testSetMillis(8 + Timing::BUTTON_DEBOUNCE_MS - 1);
+    buttons.update();
+    TEST_ASSERT_FALSE(buttons.isPressed(Button::FIRE));
+    TEST_ASSERT_FALSE(buttons.wasPressed(Button::FIRE));
+
+    testSetMillis(8 + Timing::BUTTON_DEBOUNCE_MS);
+    buttons.update();
+    TEST_ASSERT_TRUE(buttons.isPressed(Button::FIRE));
+    TEST_ASSERT_TRUE(buttons.wasPressed(Button::FIRE));
 }
 
 void test_buttons_do_not_cross_talk() {
@@ -115,6 +163,8 @@ int main() {
     RUN_TEST(test_begin_reads_initial_state);
     RUN_TEST(test_press_debounce_and_edge);
     RUN_TEST(test_release_debounce_and_edge);
+    RUN_TEST(test_glitch_shorter_than_window_ignored);
+    RUN_TEST(test_bounce_restarts_debounce_window);
     RUN_TEST(test_buttons_do_not_cross_talk);
     RUN_TEST(test_button_names);
 
