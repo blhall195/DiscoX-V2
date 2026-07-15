@@ -8,8 +8,8 @@
 #include <InternalFileSystem.h>
 
 // ff.h must precede diskio.h — diskio.h uses BYTE/UINT/LBA_t from ff.h
-#include "diskio.h"
 #include "ff.h"
+#include "diskio.h"
 
 // SoftDevice-safe internal-flash HAL from the core's InternalFileSytem
 // library (same one LittleFS writes through) — gives erase/program with a
