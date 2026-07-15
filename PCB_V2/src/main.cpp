@@ -1121,8 +1121,6 @@ static void handleMeasurementSuccess() {
     Serial.println(F("  HS:3 quick shot — skipping leg buf"));
     ctx.measurementTaken = false;
     Sounds::readingOk();
-    // If doing quick shots, prepare again immediately
-    prepareForShot();
     return;
   }
 
