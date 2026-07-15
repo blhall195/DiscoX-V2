@@ -41,7 +41,7 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 | BLE | UART bridge to DiscoX (`ble_manager` on SERCOM1) | `src/ble_manager.cpp` wraps `src/drivers/sap6_ble.*` in-process; same `BleCommand` dispatch in `pollBLECommands()`. Connection monitor + Coded-PHY dance live in `BleManager::update()` |
 | Accelerometer | ISM330DHCX (I2C, accel+gyro, m/s²) | SCA3300 (SPI on dedicated `SPIClass(NRF_SPIM2, …)`, MODE_1 ±3 g, reports g → ×9.80665 at the read sites). **No gyro**: motion for the adaptive EMA + display freeze is derived from accel-vs-EMA deviation (`ACCEL_MOTION_THRESHOLD` in main.cpp — tune on hardware) |
 | Laser | Egismos @ 9600 (`laser_egismos`) | Meskernel LDJ-100RED @ 115200: `src/laser_manager.cpp` presents the old `LaserError` surface over `drivers/ldj100`. Beeps are no longer the laser's job — **all UI sounds live in `src/sounds.cpp`** (per-event vocabulary: shot click, loud 4 kHz reading bleep, rising leg-complete fanfare, falling error womp; power on/off is deliberately silent) over `drivers/buzzer` (`tone` + `sweep` primitives, blocking bit-bang, piezo loudest at its 4 kHz resonance). `LaserManager::setBuzzer(true)` survives as a V1-compat shim (→ `Sounds::click()`) for calibration_mode; `setBuzzer(false)` = no-op |
-| Storage | QSPI flash + FAT (SdFat) + USB-MSC drive mode | **Internal flash + LittleFS** (`InternalFileSystem`). Same file set: `/config.json`, `/calibration.{bin,json}`, `/cal_metrics.bin`, `/pending.txt`, `/flags/*`. USB drive mode is **back** (2026-07-09) via a 128 KB FAT12 partition carved out of internal flash — see "USB drive mode" section. Firmware update still via UF2 bootloader (`enterUf2Dfu()`), storage recovery via menu → Settings → Reformat Storage |
+| Storage | QSPI flash + FAT (SdFat) + USB-MSC drive mode | **Internal flash + LittleFS** (`InternalFileSystem`). Same file set: `/config.json`, `/calibration.{bin,json}`, `/cal_metrics.bin`, `/pending.txt`, `/flags/*`. USB drive mode is **back** (2026-07-09) via a 128 KB FAT12 partition carved out of internal flash — see "USB drive mode" section. Firmware update still via UF2 bootloader (double-tap-reset magic, see Gotchas), storage recovery via menu → Settings → Reformat Storage |
 | Buttons | 5 GPIO buttons | 4 GPIO buttons + hardware power toggle (LTC2954). Enum: `FIRE, UP_DISCO, DOWN, MENU` |
 | Power off | SHUTDOWN button GPIO + LTC2952 PIN_POWER | LTC2954: `pollPowerButton()` watches PB_INT (edge-triggered, 20 ms confirm, boot-hold guard), `doShutdown()` → `power.powerOff()` drives KILL LOW. `systemPowerOff()` (declared in config.h) is the hook for menu/snake timeout paths |
 | RGB LED | NeoPixel + power-gate pin | WS2812 on P0.31, rail hardware-gated by ENA (no power pin) |
@@ -154,6 +154,13 @@ on the USB task and must never interleave with loop-task filesystem writes.
 - **Boot-button roles differ**: FIRE held at power-on = serial-debug wait +
   I2C scan (pre-existing); **DOWN held at power-on = USB drive mode**. Don't
   reassign either without updating the drive-mode recovery docs.
+- **Menu → Update Firmware must NOT use `enterUf2Dfu()`**: that GPREGRET
+  (0x57) path gives USB only 3 s to enumerate before the bootloader falls
+  back into the app — macOS's "Allow accessory to connect?" prompt outlasts
+  it, so the device appeared to just restart. main.cpp instead writes the
+  bootloader's double-tap-reset magic (`0x5A1AD5` → RAM `0x20007F7C`) and
+  resets — the no-timeout DFU branch, waits until firmware arrives or the
+  power button hard-kills. (Fixed 2026-07-15.)
 - The linker script is project-local (`linker/nrf52840_s140_v6_usbfat.ld`).
   Removing the `board_build.ldscript` line silently lets the app grow over
   the FAT partition once it passes 668 KB — keep script, `flash_layout.h`,

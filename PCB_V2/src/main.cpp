@@ -24,6 +24,12 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <cstdint>
+#include <nrf_sdm.h>
+
+// Adafruit_nRF52_Bootloader double-tap-reset mailbox (src/main.c) — writing
+// the magic here then resetting enters UF2 DFU with no USB timeout.
+static constexpr uint32_t DFU_DBL_RESET_MEM = 0x20007F7C;
+static constexpr uint32_t DFU_DBL_RESET_MAGIC = 0x5A1AD5;
 
 // ── Embedded calibration data ──────────────────────────────────────
 // From Main board/calibration_dict.json — loaded at startup.
@@ -547,8 +553,17 @@ void loop() {
       delay(3000);
     }
 
-    // Adafruit nRF52 core: reboot straight into the UF2 bootloader
-    enterUf2Dfu();
+    // Reboot into the UF2 bootloader via the double-tap-reset magic.
+    // NOT enterUf2Dfu(): its GPREGRET path gives USB only 3 s to
+    // enumerate before the bootloader falls back into the app — macOS's
+    // "Allow accessory to connect?" prompt outlasts that. The double-tap
+    // magic takes the bootloader's no-timeout branch, so it waits in DFU
+    // until firmware arrives or the power button hard-kills.
+    sd_softdevice_disable();
+    __disable_irq();
+    *reinterpret_cast<volatile uint32_t *>(DFU_DBL_RESET_MEM) =
+        DFU_DBL_RESET_MAGIC;
+    NVIC_SystemReset();
     // Does not return
   }
 
