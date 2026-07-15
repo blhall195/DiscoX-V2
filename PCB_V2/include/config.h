@@ -38,9 +38,8 @@ constexpr uint16_t RM3100_CYCLE_COUNT = 400;
 
 // ── I2C addresses ───────────────────────────────────────────────────
 constexpr uint8_t MAX17048_ADDR = 0x36; // Battery gauge
-constexpr uint8_t SH1107_ADDR =
-    0x3C; // OLED display (V2 panel straps SA0 low; V1 was 0x3D — verified on
-          // hardware 2026-07-07)
+constexpr uint8_t SH1107_ADDR = 0x3C;   // OLED display (V2 panel straps SA0 low; V1 was 0x3D — verified on
+                                        // hardware 2026-07-07)
 constexpr uint8_t SH1107_WIDTH = 128;
 constexpr uint8_t SH1107_HEIGHT = 128;
 

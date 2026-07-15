@@ -14,11 +14,11 @@ typedef BYTE DSTATUS;
 
 /* Results of Disk Functions */
 typedef enum {
-  RES_OK = 0, /* 0: Successful */
-  RES_ERROR,  /* 1: R/W Error */
-  RES_WRPRT,  /* 2: Write Protected */
-  RES_NOTRDY, /* 3: Not Ready */
-  RES_PARERR  /* 4: Invalid Parameter */
+    RES_OK = 0, /* 0: Successful */
+    RES_ERROR,  /* 1: R/W Error */
+    RES_WRPRT,  /* 2: Write Protected */
+    RES_NOTRDY, /* 3: Not Ready */
+    RES_PARERR  /* 4: Invalid Parameter */
 } DRESULT;
 
 /*---------------------------------------*/
@@ -39,16 +39,15 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff);
 /* Command code for disk_ioctrl fucntion */
 
 /* Generic command (Used by FatFs) */
-#define CTRL_SYNC                                                              \
-  0 /* Complete pending write process (needed at FF_FS_READONLY == 0) */
+#define CTRL_SYNC 0        /* Complete pending write process (needed at FF_FS_READONLY == 0) */
 #define GET_SECTOR_COUNT 1 /* Get media size (needed at FF_USE_MKFS == 1) */
-#define GET_SECTOR_SIZE                                                        \
-  2 /* Get sector size (needed at FF_MAX_SS != FF_MIN_SS) */
-#define GET_BLOCK_SIZE 3 /* Get erase block size (needed at FF_USE_MKFS == 1)  \
-                          */
-#define CTRL_TRIM                                                              \
-  4 /* Inform device that the data on the block of sectors is no longer used   \
-       (needed at FF_USE_TRIM == 1) */
+#define GET_SECTOR_SIZE 2  /* Get sector size (needed at FF_MAX_SS != FF_MIN_SS) */
+#define GET_BLOCK_SIZE                                                                                       \
+    3 /* Get erase block size (needed at FF_USE_MKFS == 1)                                                   \
+       */
+#define CTRL_TRIM                                                                                            \
+    4 /* Inform device that the data on the block of sectors is no longer used                               \
+         (needed at FF_USE_TRIM == 1) */
 
 /* Generic command (Not used by FatFs) */
 #define CTRL_POWER 5  /* Get/Set power status */

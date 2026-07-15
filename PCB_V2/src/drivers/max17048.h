@@ -17,24 +17,24 @@
 // `+<drivers/>` build filter doesn't pull the Adafruit MAX1704X dependency into
 // every other bring-up env — only the env that includes this header needs it.
 class MAX17048_Persistent : public Adafruit_MAX17048 {
-public:
-  bool begin(TwoWire *wire = &Wire) {
-    if (i2c_dev) {
-      delete i2c_dev;
-      delete status_reg;
+  public:
+    bool begin(TwoWire *wire = &Wire) {
+        if (i2c_dev) {
+            delete i2c_dev;
+            delete status_reg;
+        }
+        i2c_dev = new Adafruit_I2CDevice(MAX17048_I2CADDR_DEFAULT, wire);
+        if (!i2c_dev->begin()) {
+            return false;
+        }
+        if (!isDeviceReady()) {
+            return false;
+        }
+        status_reg = new Adafruit_BusIO_Register(i2c_dev, MAX1704X_STATUS_REG);
+        // No reset() — preserve ModelGauge tracking state
+        enableSleep(false);
+        sleep(false);
+        wake(); // exit hibernation if the IC entered it
+        return true;
     }
-    i2c_dev = new Adafruit_I2CDevice(MAX17048_I2CADDR_DEFAULT, wire);
-    if (!i2c_dev->begin()) {
-      return false;
-    }
-    if (!isDeviceReady()) {
-      return false;
-    }
-    status_reg = new Adafruit_BusIO_Register(i2c_dev, MAX1704X_STATUS_REG);
-    // No reset() — preserve ModelGauge tracking state
-    enableSleep(false);
-    sleep(false);
-    wake(); // exit hibernation if the IC entered it
-    return true;
-  }
 };

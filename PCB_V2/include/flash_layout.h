@@ -16,17 +16,14 @@
 // touch the pages of the application image itself.
 
 namespace FlashLayout {
-constexpr uint32_t FAT_START = 0xCD000;   // first byte of FAT partition
-constexpr uint32_t FAT_SIZE = 128 * 1024; // 32 × 4 KB pages
-constexpr uint32_t FAT_END =
-    FAT_START + FAT_SIZE;             // == LittleFS start (0xED000)
-constexpr uint32_t SECTOR_SIZE = 512; // FAT sector size
+constexpr uint32_t FAT_START = 0xCD000;            // first byte of FAT partition
+constexpr uint32_t FAT_SIZE = 128 * 1024;          // 32 × 4 KB pages
+constexpr uint32_t FAT_END = FAT_START + FAT_SIZE; // == LittleFS start (0xED000)
+constexpr uint32_t SECTOR_SIZE = 512;              // FAT sector size
 constexpr uint32_t SECTOR_COUNT = FAT_SIZE / SECTOR_SIZE;
 constexpr uint32_t PAGE_SIZE = 4096; // nRF52 erase page
 
-static_assert(FAT_END == 0xED000,
-              "FAT partition must butt up against InternalFS LittleFS");
+static_assert(FAT_END == 0xED000, "FAT partition must butt up against InternalFS LittleFS");
 static_assert(FAT_START % PAGE_SIZE == 0, "FAT partition must be page-aligned");
-static_assert(FAT_SIZE % PAGE_SIZE == 0,
-              "FAT partition must be a whole number of pages");
+static_assert(FAT_SIZE % PAGE_SIZE == 0, "FAT partition must be a whole number of pages");
 } // namespace FlashLayout

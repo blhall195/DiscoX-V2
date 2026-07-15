@@ -25,8 +25,8 @@ extern const uint8_t SAP6_COMMAND_UUID[16];
 extern const uint8_t SAP6_LEG_DATA_UUID[16];
 
 // SAP6 protocol command bytes
-constexpr uint8_t SAP6_CMD_ACK0 = 0x55; // Acknowledge leg with sequence bit 0
-constexpr uint8_t SAP6_CMD_ACK1 = 0x56; // Acknowledge leg with sequence bit 1
+constexpr uint8_t SAP6_CMD_ACK0 = 0x55;       // Acknowledge leg with sequence bit 0
+constexpr uint8_t SAP6_CMD_ACK1 = 0x56;       // Acknowledge leg with sequence bit 1
 constexpr uint8_t SAP6_CMD_STOP_CAL = 0x30;   // Finish calibration
 constexpr uint8_t SAP6_CMD_START_CAL = 0x31;  // Start calibration
 constexpr uint8_t SAP6_CMD_DEVICE_OFF = 0x34; // Turn device off
@@ -44,69 +44,68 @@ constexpr int SAP6_SEND_QUEUE_MAX = 20;        // max queued leg readings
 
 // One queued survey measurement
 struct LegReading {
-  float azimuth;
-  float inclination;
-  float roll;
-  float distance;
+    float azimuth;
+    float inclination;
+    float roll;
+    float distance;
 };
 
 class SAP6Protocol {
-public:
-  // Create the GATT service and characteristics. Call AFTER Bluefruit.begin().
-  // Returns false if any GATT registration failed.
-  bool begin();
+  public:
+    // Create the GATT service and characteristics. Call AFTER Bluefruit.begin().
+    // Returns false if any GATT registration failed.
+    bool begin();
 
-  // Queue a measurement for BLE transmission (drop if queue full).
-  void sendData(float azimuth, float inclination, float distance,
-                float roll = 0.0f);
+    // Queue a measurement for BLE transmission (drop if queue full).
+    void sendData(float azimuth, float inclination, float distance, float roll = 0.0f);
 
-  // Drive the state machine: check for inbound commands, handle ACK/retry.
-  // Returns the received command byte (>= 0), or -1 if nothing actionable.
-  // ACKs for the in-flight packet are consumed internally and also returned.
-  int poll();
+    // Drive the state machine: check for inbound commands, handle ACK/retry.
+    // Returns the received command byte (>= 0), or -1 if nothing actionable.
+    // ACKs for the in-flight packet are consumed internally and also returned.
+    int poll();
 
-  // How many readings are waiting (queue + any in-flight packet).
-  int pending();
+    // How many readings are waiting (queue + any in-flight packet).
+    int pending();
 
-  // Called from the static BLE write callback trampoline.
-  void onCommandWrite(uint16_t conn_hdl, uint8_t *data, uint16_t len);
+    // Called from the static BLE write callback trampoline.
+    void onCommandWrite(uint16_t conn_hdl, uint8_t *data, uint16_t len);
 
-  // Expose service for advertising setup.
-  BLEService &service() { return _service; }
+    // Expose service for advertising setup.
+    BLEService &service() { return _service; }
 
-  // Diagnostics (bring-up / status display)
-  uint32_t sentCount() const { return _sentCount; }
-  uint32_t ackedCount() const { return _ackedCount; }
-  uint32_t resendCount() const { return _resendCount; }
-  bool waitingForAck() const { return _waitingForAck; }
+    // Diagnostics (bring-up / status display)
+    uint32_t sentCount() const { return _sentCount; }
+    uint32_t ackedCount() const { return _ackedCount; }
+    uint32_t resendCount() const { return _resendCount; }
+    bool waitingForAck() const { return _waitingForAck; }
 
-private:
-  void pollOut();
-  int pollIn();
+  private:
+    void pollOut();
+    int pollIn();
 
-  BLEService _service{SAP6_SERVICE_UUID};
-  BLECharacteristic _protoNameChar{SAP6_PROTO_NAME_UUID};
-  BLECharacteristic _commandChar{SAP6_COMMAND_UUID};
-  BLECharacteristic _legDataChar{SAP6_LEG_DATA_UUID};
+    BLEService _service{SAP6_SERVICE_UUID};
+    BLECharacteristic _protoNameChar{SAP6_PROTO_NAME_UUID};
+    BLECharacteristic _commandChar{SAP6_COMMAND_UUID};
+    BLECharacteristic _legDataChar{SAP6_LEG_DATA_UUID};
 
-  LegReading _queue[SAP6_SEND_QUEUE_MAX];
-  int _queueHead = 0;
-  int _queueTail = 0;
-  int _queueCount = 0;
+    LegReading _queue[SAP6_SEND_QUEUE_MAX];
+    int _queueHead = 0;
+    int _queueTail = 0;
+    int _queueCount = 0;
 
-  // Sequence-bit ACK/retry state
-  uint8_t _lastSentBit = 0;
-  bool _waitingForAck = false;
-  uint32_t _lastSendTime = 0;
-  uint8_t _currentPacket[17] = {}; // cached for resend
+    // Sequence-bit ACK/retry state
+    uint8_t _lastSentBit = 0;
+    bool _waitingForAck = false;
+    uint32_t _lastSendTime = 0;
+    uint8_t _currentPacket[17] = {}; // cached for resend
 
-  // Inbound command from BLE write callback (set from BLE context)
-  volatile uint8_t _pendingCmd = 0;
-  volatile bool _cmdReceived = false;
+    // Inbound command from BLE write callback (set from BLE context)
+    volatile uint8_t _pendingCmd = 0;
+    volatile bool _cmdReceived = false;
 
-  uint32_t _sentCount = 0;
-  uint32_t _ackedCount = 0;
-  uint32_t _resendCount = 0;
+    uint32_t _sentCount = 0;
+    uint32_t _ackedCount = 0;
+    uint32_t _resendCount = 0;
 };
 
 extern SAP6Protocol sap6;

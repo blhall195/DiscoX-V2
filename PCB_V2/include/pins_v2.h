@@ -42,11 +42,9 @@
 
 // --- Power management (LTC2954 pushbutton controller U9, BQ24074 charger U2)
 // ---
-#define PIN_KILL 4 // module pin 20, P0.04, net KILL  — drive LOW to power off
-#define PIN_PB_INT                                                             \
-  6 // module pin 22, P0.06, net INT   — LOW on power-button press
-#define PIN_PGOOD                                                              \
-  13 // module pin 37, P0.13, net PGOOD — charger power good (open drain)
+#define PIN_KILL 4   // module pin 20, P0.04, net KILL  — drive LOW to power off
+#define PIN_PB_INT 6 // module pin 22, P0.06, net INT   — LOW on power-button press
+#define PIN_PGOOD 13 // module pin 37, P0.13, net PGOOD — charger power good (open drain)
 
 // --- Buzzer (driven push-pull across two GPIOs) ---
 #define PIN_BUZZER_A 20 // module pin 44, P0.20, net BUZZ1

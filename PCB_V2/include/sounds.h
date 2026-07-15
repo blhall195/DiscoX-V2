@@ -20,18 +20,16 @@ namespace Sounds {
 // Sounds are silently skipped until then.
 void begin(Buzzer &buzzer);
 
-void shotStart(); // measurement started / laser fired: short crisp click
-void click();     // generic short confirmation blip (calibration points, etc.)
-void readingOk(); // reading captured: single LOUD bleep at resonance
+void shotStart();   // measurement started / laser fired: short crisp click
+void click();       // generic short confirmation blip (calibration points, etc.)
+void readingOk();   // reading captured: single LOUD bleep at resonance
 void legComplete(); // 3 consistent shots: rising three-note fanfare
 void warning();     // soft refusal (e.g. splays disabled): two mid blips
 void error();       // measurement/system error: sad falling womp
 
 // ── Snake game ──
-void snakeStart(); // game begins: quick rising "ready" chirp
-void snakeEat(
-    uint16_t score); // food eaten: pickup blip that climbs with the score
-void snakeCrash(
-    uint8_t n); // game over: falling womp per red flash (n = 0,1,2…)
+void snakeStart();             // game begins: quick rising "ready" chirp
+void snakeEat(uint16_t score); // food eaten: pickup blip that climbs with the score
+void snakeCrash(uint8_t n);    // game over: falling womp per red flash (n = 0,1,2…)
 
 } // namespace Sounds
