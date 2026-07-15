@@ -1,14 +1,15 @@
 # Mr Zappy PCB V2 — production firmware (single nRF52840)
 
 Merged port of the V1 two-board system onto the Raytac MDBT50Q-U1MV2 module:
-everything from `../Main board C++/` (sensors, display, laser, survey logic,
-calibration) plus the SAP6 BLE protocol from `../DiscoX C++ BLE/` now runs
+everything from the V1 main board (sensors, display, laser, survey logic,
+calibration) plus the SAP6 BLE protocol from the V1 DiscoX BLE board now runs
 in-process on one MCU. The V1 UART bridge (SERCOM1, DRDY handshake,
 `COMPASS:`/`ALIVE`/`NAME:` lines, READY/ACK strings) is gone.
 
 Hardware bring-up tests, the decoded netlist, and datasheets live in
 **`../PCB_V2 test/`** — its CLAUDE.md has the per-IC verification status.
-The V1 projects remain the reference implementation this was ported from.
+The V1 firmware this was ported from lives in the original repo:
+https://github.com/blhall195/Mr_Zappy
 
 ## Build / flash / monitor
 
@@ -115,11 +116,13 @@ on the USB task and must never interleave with loop-task filesystem writes.
   made `button_manager.cpp` read the DK's buttons; fixed 2026-07-07).
 - **I2C pins are not variant defaults**: `Wire.setPins(PIN_I2C_SDA, PIN_I2C_SCL)`
   runs before `Wire.begin()` in setup() — don't reorder.
-- **Coded PHY needs the patched global Bluefruit library**
-  (`BLEConnection.cpp` ~line 392 answers PHY update requests with
-  `BLE_GAP_PHY_CODED`, see "BLE Long Range" in `../DiscoX C++ BLE/CLAUDE.md`).
-  A platform/framework update reverts it silently — if a previously-Coded
-  phone reports 1 Mbps, check there FIRST.
+- **Coded PHY needs the patched global Bluefruit library**: in
+  `~/.platformio/packages/framework-arduinoadafruitnrf52/libraries/Bluefruit52Lib/src/BLEConnection.cpp`
+  (~line 392), the `BLE_GAP_EVT_PHY_UPDATE_REQUEST` handler must answer with
+  `ble_gap_phys_t phy = { BLE_GAP_PHY_CODED, BLE_GAP_PHY_CODED };` instead of
+  `BLE_GAP_PHY_AUTO` (AUTO negotiates down to 1 Mbps). A platform/framework
+  update reverts it silently — if a previously-Coded phone reports 1 Mbps,
+  check there FIRST.
 - `Bluefruit.configPrphConn(…, 24, …)` must run **before** `Bluefruit.begin()`
   (done inside `BleManager::begin()`); event length < 24 makes the PHY update
   fail with 0x0013 NRF_ERROR_RESOURCES.

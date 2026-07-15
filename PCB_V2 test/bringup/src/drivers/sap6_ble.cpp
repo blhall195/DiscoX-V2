@@ -1,5 +1,6 @@
 // sap6_ble.cpp — SAP6 BLE GATT service + reliable-delivery state machine.
-// Port of ../../DiscoX C++ BLE/src/sap6_protocol.cpp (V1, hardware-proven).
+// Port of the V1 DiscoX sap6_protocol.cpp (hardware-proven;
+// github.com/blhall195/Mr_Zappy).
 // Behaviour is identical; only additions are the diagnostic counters and
 // begin() returning success/failure for the bring-up report.
 

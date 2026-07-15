@@ -32,7 +32,8 @@ static constexpr uint32_t DFU_DBL_RESET_MEM = 0x20007F7C;
 static constexpr uint32_t DFU_DBL_RESET_MAGIC = 0x5A1AD5;
 
 // ── Embedded calibration data ──────────────────────────────────────
-// From Main board/calibration_dict.json — loaded at startup.
+// From V1's calibration_dict.json (github.com/blhall195/Mr_Zappy) —
+// loaded at startup.
 // Axes updated to the V2 mappings (2026-07-10, see config.h); the
 // transform/centre/rbf data is still V1's and only roughly valid — expect
 // MagErr until a full V2 on-device calibration replaces this fallback.

@@ -22,15 +22,10 @@ module that replaces both V1 MCUs. Two folders:
 
 ## V1 Reference Implementation
 
-V1 is a dual-MCU architecture (SAMD51 main board + nRF52840 BLE board communicating via UART).
-It is the reference the V2 port came from — still the proven, calibrated baseline.
-
-- **`V1/Main board C++/CLAUDE.md`** — full V1 main board detail: build/upload, pin map, I2C
-  addresses, session log, module status table, known issues, build gotchas
-  (SAMD51 / Feather M4 CAN, PlatformIO, `adafruit_feather_m4_can`)
-- **`V1/DiscoX C++ BLE/CLAUDE.md`** — V1 BLE board detail: SAP6 BLE protocol impl, Coded PHY
-  setup + library patch, UART state machine, pin assignments, build/flash
-  (ItsyBitsy nRF52840)
+V1 is a dual-MCU architecture (SAMD51 main board + nRF52840 BLE board
+communicating via UART) — the proven, calibrated baseline the V2 port came
+from. Its code no longer lives in this repo: see the original V1 repository
+at **https://github.com/blhall195/Mr_Zappy**.
 
 ## Data Flow
 
@@ -70,14 +65,13 @@ still pending, so the embedded V1 transform/centre data remains only roughly val
 
 ## SAP6 BLE GATT Protocol
 
-Same in V1 and V2 (V1 implemented in `V1/DiscoX C++ BLE/`, V2 in-process in `PCB_V2/`):
+Same in V1 and V2 (V2 implements it in-process in `PCB_V2/`):
 
 - 17-byte leg data: `[seqBit][az float][inc float][roll float][dist float]`
 - Sequence bit toggles 0x55/0x56 for reliable delivery with ACK/retry on 5s timeout
 - Coded PHY (BLE Long Range, S=8) on Android; iOS falls back to 1 Mbps
 - **Coded PHY requires a manual patch** to the Adafruit Bluefruit library — see
-  `V1/DiscoX C++ BLE/CLAUDE.md` for the exact change; `PCB_V2/CLAUDE.md` notes the
-  same gotcha applies there
+  the "Coded PHY" gotcha in `PCB_V2/CLAUDE.md` for the exact change
 
 ## Current Status
 - V1: calibration working, accurate to within 1 degree (commit 8682252)

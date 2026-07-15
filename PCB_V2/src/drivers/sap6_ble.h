@@ -1,6 +1,7 @@
 #pragma once
-// SAP6 BLE survey protocol — port of ../../DiscoX C++ BLE/src/sap6_protocol.cpp
-// (itself a faithful port of caveble.py SurveyProtocolService).
+// SAP6 BLE survey protocol — port of the V1 DiscoX sap6_protocol.cpp
+// (github.com/blhall195/Mr_Zappy; itself a faithful port of caveble.py
+// SurveyProtocolService).
 //
 // This is the module destined for the V2 production firmware: on V2 there is
 // no UART bridge, so sendData() is called directly from the measurement code.
@@ -12,7 +13,7 @@
 // patched global Bluefruit library (BLEConnection.cpp responds to PHY update
 // requests with BLE_GAP_PHY_CODED instead of AUTO) and on the host app calling
 // Bluefruit.configPrphConn() with event length >= 24 BEFORE Bluefruit.begin().
-// See "BLE Long Range" in ../../DiscoX C++ BLE/CLAUDE.md.
+// See the "Coded PHY" gotcha in PCB_V2/CLAUDE.md.
 
 #include <Arduino.h>
 #include <bluefruit.h>

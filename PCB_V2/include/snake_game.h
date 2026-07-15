@@ -1,5 +1,5 @@
 #pragma once
-// Snake Game — C++ port of Main board/lib/snake.py
+// Snake Game — C++ port of V1's snake.py (github.com/blhall195/Mr_Zappy)
 // 16x16 grid on 128x128 SH1107 OLED, 8-pixel cells.
 
 #include "button_manager.h"

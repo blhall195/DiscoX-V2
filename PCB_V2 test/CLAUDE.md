@@ -6,7 +6,7 @@ runs everything: sensors, display, laser, buttons, power management, and BLE.
 
 This folder holds the per-IC hardware bring-up tests (in `bringup/`) and the
 hardware documentation. The **merged production firmware now lives in
-`../PCB_V2/`** (ported from `../V1/Main board C++/` and `../V1/DiscoX C++ BLE/`) —
+`../PCB_V2/`** (ported from the V1 firmware — github.com/blhall195/Mr_Zappy) —
 this folder stays as the frozen per-IC test reference: come back here to
 isolate a suspected hardware fault to a single IC.
 
@@ -58,9 +58,9 @@ pio device monitor -b 115200         # watch output
 
 ## Adding a new IC test (the established pattern)
 
-1. Driver → `bringup/src/drivers/<ic>.h/.cpp` (class style matches
-   `../V1/Main board C++/` — see rm3100.h; verify protocol against the
-   datasheet in `hardware/datasheets/`, add it there if missing).
+1. Driver → `bringup/src/drivers/<ic>.h/.cpp` (class style matches the V1
+   firmware — github.com/blhall195/Mr_Zappy, see rm3100.h; verify protocol
+   against the datasheet in `hardware/datasheets/`, add it there if missing).
 2. Test → `bringup/src/tests/test_<ic>.cpp` with: `[PASS]/[FAIL]` report()
    pattern, keypress re-run in loop(), then a live streaming mode.
 3. Env → add to `bringup/platformio.ini`:

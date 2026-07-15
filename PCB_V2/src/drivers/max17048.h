@@ -10,8 +10,8 @@
 // (SOC then reads only 0%/100% until it re-learns the cell). This subclass
 // overrides begin() to SKIP reset(), so the gauge keeps tracking SOC across MCU
 // reboots — the IC still POR-resets on its own if battery power is removed.
-// Lifted from the V1 firmware's MAX17048_Persistent (Main board
-// C++/src/main.cpp).
+// Lifted from the V1 firmware's MAX17048_Persistent
+// (github.com/blhall195/Mr_Zappy).
 //
 // Header-only on purpose: keeping this out of a drivers/*.cpp means the shared
 // `+<drivers/>` build filter doesn't pull the Adafruit MAX1704X dependency into

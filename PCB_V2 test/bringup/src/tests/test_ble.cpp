@@ -1,7 +1,7 @@
 // PCB V2 bring-up test: BLE (SAP6 protocol, long-range Coded PHY)
 //
-// Ports the hardware-proven long-range recipe from "DiscoX C++ BLE" (see its
-// CLAUDE.md, "BLE Long Range"), which took real effort to get right — the
+// Ports the hardware-proven long-range recipe from the V1 DiscoX firmware
+// (github.com/blhall195/Mr_Zappy), which took real effort to get right — the
 // order of operations matters:
 //   1. Bluefruit.configPrphConn(..., 24, ...) BEFORE begin() — the default
 //      event length of 3 (3.75 ms) is too short for Coded PHY; without this
