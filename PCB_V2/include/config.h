@@ -5,9 +5,9 @@
 // (pins 11/12/24/25). pins_v2.h re-#defines those names to THIS board's
 // button pins (27/35/37/39) and must be processed last, or button_manager.cpp
 // (which pulls this header before any Arduino.h) silently reads the DK's pins.
+#include <Arduino.h>
 #include "defaults.h"
 #include "pins_v2.h"
-#include <Arduino.h>
 
 // PCB V2 — single nRF52840 (Raytac MDBT50Q-U1MV2). All physical pins come
 // from pins_v2.h (canonical, cross-checked against
