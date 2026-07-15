@@ -157,13 +157,16 @@ on the USB task and must never interleave with loop-task filesystem writes.
 - **Boot-button roles differ**: FIRE held at power-on = serial-debug wait +
   I2C scan (pre-existing); **DOWN held at power-on = USB drive mode**. Don't
   reassign either without updating the drive-mode recovery docs.
-- **Menu → Update Firmware must NOT use `enterUf2Dfu()`**: that GPREGRET
-  (0x57) path gives USB only 3 s to enumerate before the bootloader falls
-  back into the app — macOS's "Allow accessory to connect?" prompt outlasts
-  it, so the device appeared to just restart. main.cpp instead writes the
-  bootloader's double-tap-reset magic (`0x5A1AD5` → RAM `0x20007F7C`) and
-  resets — the no-timeout DFU branch, waits until firmware arrives or the
-  power button hard-kills. (Fixed 2026-07-15.)
+- **Menu → Update Firmware needs USB already connected**: the bootloader's
+  `enterUf2Dfu()` GPREGRET (0x57) path gives USB only 3 s to enumerate
+  before falling back into the app, so main.cpp waits for
+  `TinyUSBDevice.mounted()` before resetting (MENU cancels). The
+  bootloader's no-timeout DFU branch is NOT reachable from software — its
+  double-tap magic (`0x5A1AD5` → RAM `0x20007F7C`) is gated on
+  `RESETREAS & RESETPIN`, and `NVIC_SystemReset()` doesn't set that (tried
+  2026-07-15, bounced straight back into the app). If a fresh macOS
+  "Allow accessory to connect?" prompt still outlasts the 3 s window, the
+  only full fix is rebuilding the bootloader with a longer timeout.
 - The linker script is project-local (`linker/nrf52840_s140_v6_usbfat.ld`).
   Removing the `board_build.ldscript` line silently lets the app grow over
   the FAT partition once it passes 668 KB — keep script, `flash_layout.h`,

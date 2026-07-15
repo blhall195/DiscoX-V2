@@ -20,16 +20,11 @@
 #include "snake_game.h"
 #include "sounds.h"
 #include "usb_drive.h"
+#include <Adafruit_TinyUSB.h>
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <cstdint>
-#include <nrf_sdm.h>
-
-// Adafruit_nRF52_Bootloader double-tap-reset mailbox (src/main.c) — writing
-// the magic here then resetting enters UF2 DFU with no USB timeout.
-static constexpr uint32_t DFU_DBL_RESET_MEM = 0x20007F7C;
-static constexpr uint32_t DFU_DBL_RESET_MAGIC = 0x5A1AD5;
 
 // ── Embedded calibration data ──────────────────────────────────────
 // From V1's calibration_dict.json (github.com/blhall195/Mr_Zappy) —
@@ -525,6 +520,39 @@ void loop() {
     // Update Firmware
     if (menuMgr.exitAction() == MenuExitAction::ENTER_BOOTLOADER) {
         menuMgr.clearExitAction();
+
+        // The bootloader gives USB only 3 s to enumerate after enterUf2Dfu()
+        // before rebooting back into the app, so DFU only sticks if the PC
+        // link is already up — wait for USB before resetting (MENU cancels).
+        // The bootloader's no-timeout DFU branch is NOT reachable from
+        // software: its double-tap magic is gated on a reset-PIN reset,
+        // which NVIC_SystemReset() is not (see CLAUDE.md gotcha).
+        if (!TinyUSBDevice.mounted()) {
+            Serial.println(F("Waiting for USB before bootloader entry..."));
+            if (dispOk) {
+                auto &d = display.getDisplay();
+                d.clearDisplay();
+                d.setTextSize(1);
+                d.setTextColor(SH110X_WHITE);
+                d.setCursor(0, 10);
+                d.println(F("Firmware update"));
+                d.println();
+                d.println(F("Plug device into PC"));
+                d.println(F("to continue..."));
+                d.println();
+                d.println(F("MENU: cancel"));
+                d.display();
+            }
+            while (!TinyUSBDevice.mounted()) {
+                buttons.update();
+                if (buttons.wasPressed(Button::MENU)) {
+                    Serial.println(F("Bootloader entry cancelled"));
+                    return;
+                }
+                delay(10);
+            }
+        }
+
         Serial.println(F("Entering UF2 bootloader..."));
         if (dispOk) {
             auto &d = display.getDisplay();
@@ -534,27 +562,18 @@ void loop() {
             d.setCursor(0, 10);
             d.println(F("Entered bootloader"));
             d.println();
-            d.println(F("Plug device into PC"));
-            d.println(F("and flash new"));
-            d.println(F("firmware (.uf2)"));
+            d.println(F("Copy new firmware"));
+            d.println(F("(.uf2) onto the"));
+            d.println(F("USB drive."));
             d.println();
-            d.println(F("Load new firmware or"));
-            d.println(F("hold power button"));
+            d.println(F("Hold power button"));
             d.println(F("to exit."));
             d.display();
-            delay(3000);
+            delay(1500);
         }
 
-        // Reboot into the UF2 bootloader via the double-tap-reset magic.
-        // NOT enterUf2Dfu(): its GPREGRET path gives USB only 3 s to
-        // enumerate before the bootloader falls back into the app — macOS's
-        // "Allow accessory to connect?" prompt outlasts that. The double-tap
-        // magic takes the bootloader's no-timeout branch, so it waits in DFU
-        // until firmware arrives or the power button hard-kills.
-        sd_softdevice_disable();
-        __disable_irq();
-        *reinterpret_cast<volatile uint32_t *>(DFU_DBL_RESET_MEM) = DFU_DBL_RESET_MAGIC;
-        NVIC_SystemReset();
+        // Adafruit nRF52 core: reboot into the UF2 bootloader (3 s USB window)
+        enterUf2Dfu();
         // Does not return
     }
 
