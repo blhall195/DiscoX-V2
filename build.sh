@@ -14,3 +14,13 @@ python3 "$UF2CONV" \
     --family 0xada52840 --convert \
     --output "$BUILD/v2.uf2"
 echo "-> $BUILD/v2.uf2"
+
+# Flash-on-build, as V1's SAMD path had: uf2conv auto-deploys to a mounted
+# UF2 bootloader drive, but only in non---convert mode (hex input needs
+# --convert), so deploy explicitly. No drive mounted (e.g. CI) -> skip.
+if [ -n "$(python3 "$UF2CONV" --list)" ]; then
+    echo "=== Flashing (UF2 drive) ==="
+    python3 "$UF2CONV" "$BUILD/v2.uf2" --deploy
+else
+    echo "(no UF2 drive mounted — skipped flash)"
+fi
