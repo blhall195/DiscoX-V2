@@ -12,6 +12,8 @@ std::array<int, 256> pinValues = [] {
 uint32_t currentMillis = 0;
 } // namespace
 
+SerialStub Serial;
+
 extern "C" uint32_t millis() { return currentMillis; }
 
 extern "C" int digitalRead(uint8_t pin) { return pinValues[pin]; }

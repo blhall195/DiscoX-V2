@@ -22,28 +22,18 @@
 #define INPUT_PULLUP 0x2
 #endif
 
-#ifndef A0
-#define A0 14
-#endif
+// Pin constants as typed constants, NOT macros — real Arduino cores do the
+// same, and macros here collide with identifiers inside Eigen (A0, A2, ...)
+static const uint8_t A0 = 14;
+static const uint8_t A1 = 15;
+static const uint8_t A2 = 16;
+static const uint8_t A3 = 17;
+static const uint8_t A4 = 18;
+static const uint8_t SCK = 19;
 
-#ifndef A1
-#define A1 15
-#endif
-
-#ifndef A2
-#define A2 16
-#endif
-
-#ifndef A3
-#define A3 17
-#endif
-
-#ifndef A4
-#define A4 18
-#endif
-
-#ifndef SCK
-#define SCK 19
+// Flash-string helper is a no-op on host
+#ifndef F
+#define F(x) (x)
 #endif
 
 extern "C" {
@@ -51,6 +41,19 @@ uint32_t millis();
 int digitalRead(uint8_t pin);
 void pinMode(uint8_t pin, uint8_t mode);
 }
+
+// Minimal no-op Serial so host builds can link code with debug prints
+// (e.g. mag_cal/calibration.cpp)
+class SerialStub {
+  public:
+    template <typename T> void print(const T &) {}
+    template <typename T> void print(const T &, int) {}
+    template <typename T> void println(const T &) {}
+    template <typename T> void println(const T &, int) {}
+    void println() {}
+    void flush() {}
+};
+extern SerialStub Serial;
 
 void testSetMillis(uint32_t value);
 void testSetDigitalRead(uint8_t pin, int value);

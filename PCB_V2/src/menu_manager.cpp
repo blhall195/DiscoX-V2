@@ -135,14 +135,13 @@ void MenuManager::buildMenu() {
     _root.addSubmenu("Delete saved shots", &_deleteSub);
 
     // ── Enter Calibration submenu ────────────────────────────────
-    _longCalSub.init(*_display, "Long Calibration");
-    _calSub.addSubmenu("Long Calibration", &_longCalSub);
-    _calSub.addAction("Short Calibration", enterShortCalibration);
+    _longCalSub.init(*_display, "Enter Calibration");
+    _calSub.addSubmenu("Enter Calibration", &_longCalSub);
     _calSub.addAction("Mag Field Check", enterFBCheck);
     _calSub.addAction("View Last Cal", viewLastCal);
     _calSub.addAction("<- Back", goToRoot);
 
-    // ── Long Calibration submenu ────────────────────────────────
+    // ── Enter Calibration (Part 1/2) submenu ────────────────────
     _longCalSub.addAction("Part 1 (Ellipsoid)", enterPart1Calibration);
     _longCalSub.addAction("Part 2 (Alignment)", enterPart2Calibration);
 
@@ -258,15 +257,6 @@ void MenuManager::enterPart2Calibration(int) {
     Serial.println(F("Menu: entering Part 2 (Alignment) calibration"));
     s_instance->_active = false;
     s_instance->_exitAction = MenuExitAction::ENTER_PART2_CALIB;
-}
-
-void MenuManager::enterShortCalibration(int) {
-    if (!s_instance) {
-        return;
-    }
-    Serial.println(F("Menu: entering short calibration"));
-    s_instance->_active = false;
-    s_instance->_exitAction = MenuExitAction::ENTER_SHORT_CALIB;
 }
 
 void MenuManager::setAnomalyOn(int) {

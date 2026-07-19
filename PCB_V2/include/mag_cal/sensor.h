@@ -42,7 +42,9 @@ class Sensor {
     // ── Fitting methods (Session 11 — use dynamic allocation) ──
 
     /// Fit an ellipsoid to raw sensor readings. Sets transform_ and centre_.
-    /// Returns uniformity metric (lower is better).
+    /// Returns uniformity metric (lower is better), or -1.0 if the fit is
+    /// degenerate (too few points / poor coverage) — in that case the
+    /// sensor's calibration state is left unchanged.
     float fitEllipsoid(const std::vector<Eigen::Vector3f> &data);
 
     /// Align sensor axis from multiple orientation datasets.

@@ -468,13 +468,10 @@ void loop() {
 
     // ── Handle menu exit transitions (one-shot) ──
     if (menuMgr.exitAction() == MenuExitAction::ENTER_PART1_CALIB ||
-        menuMgr.exitAction() == MenuExitAction::ENTER_PART2_CALIB ||
-        menuMgr.exitAction() == MenuExitAction::ENTER_SHORT_CALIB) {
+        menuMgr.exitAction() == MenuExitAction::ENTER_PART2_CALIB) {
         CalMode cm = CalMode::PART1_ELLIPSOID;
         if (menuMgr.exitAction() == MenuExitAction::ENTER_PART2_CALIB) {
             cm = CalMode::PART2_ALIGNMENT;
-        } else if (menuMgr.exitAction() == MenuExitAction::ENTER_SHORT_CALIB) {
-            cm = CalMode::SHORT;
         }
         menuMgr.clearExitAction();
         if (magOk && accelOk && dispOk && laserOk) {

@@ -22,7 +22,6 @@
 enum class CalMode : uint8_t {
     PART1_ELLIPSOID, // 56-pt ellipsoid only → results → save
     PART2_ALIGNMENT, // 24-pt alignment only (requires existing ellipsoid cal)
-    SHORT,           // 24-pt short cal (ellipsoid + alignment on same data)
 };
 
 /// Calibration state machine states
@@ -33,8 +32,7 @@ enum class CalibState : uint8_t {
     CALCULATING_ELLIPSOID, // running ellipsoid fitting math
     INTRO_ALIGNMENT,       // showing alignment instruction screen
     COLLECTING_ALIGNMENT,  // 24-point alignment collection (3 stages × 8)
-    CALCULATING_ALIGNMENT, // running alignment fitting math (long cal)
-    CALCULATING_SHORT,     // running ellipsoid + alignment on same 24 pts (short cal)
+    CALCULATING_ALIGNMENT, // running alignment fitting math
     SHOW_RESULTS,          // displaying accuracy, waiting for save/discard
     SAVING,                // writing calibration to flash
     FB_INTRO,              // F/B check: showing instructions
@@ -139,6 +137,10 @@ class CalibrationMode {
     float resultGravAcc_ = 0.0f;
     float resultAccuracy_ = 0.0f;
 
+    // Negative uniformity = fitEllipsoid rejected the data as degenerate;
+    // the results screen then only offers discard, never save.
+    bool ellipsoidFitFailed() const { return resultMagAcc_ < 0.0f || resultGravAcc_ < 0.0f; }
+
     // ── Timing ──
     uint32_t lastSampleTime_ = 0;
     uint32_t beepEndTime_ = 0;
@@ -193,7 +195,6 @@ class CalibrationMode {
     void updateCollecting();
     void updateCalculatingEllipsoid();
     void updateCalculatingAlignment();
-    void updateCalculatingShort();
     void updateShowResults();
     void updateSaving();
     void updateFBIntro();

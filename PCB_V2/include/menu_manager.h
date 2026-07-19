@@ -12,7 +12,6 @@ enum class MenuExitAction : uint8_t {
     RETURN_NORMAL,     // go back to normal operation
     ENTER_PART1_CALIB, // enter Part 1 calibration (ellipsoid, 56 pts)
     ENTER_PART2_CALIB, // enter Part 2 calibration (alignment, 24 pts)
-    ENTER_SHORT_CALIB, // enter short calibration mode
     ENTER_SNAKE,       // launch snake game
     ENTER_FB_CHECK,    // enter foresight/backsight field check
     ENTER_BOOTLOADER,  // reboot into UF2 bootloader for firmware update
@@ -82,7 +81,6 @@ class MenuManager {
     static void goToSettings(int);
     static void enterPart1Calibration(int);
     static void enterPart2Calibration(int);
-    static void enterShortCalibration(int);
     static void setAnomalyOn(int);
     static void setAnomalyOff(int);
     static void deletePending(int);

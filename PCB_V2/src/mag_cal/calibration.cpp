@@ -569,6 +569,13 @@ void Calibration::alignSensorRoll(const std::vector<Eigen::Vector3f> &magData,
         Eigen::Vector2d coeffs = D.colPivHouseholderQr().solve(xb);
         double s = coeffs[0];
 
+        // |sin| >= 1 means the fit is degenerate — sqrt(1 - s²) would go NaN
+        // and poison the stored transform. A real roll misalignment is always
+        // a small angle, so stop iterating rather than apply a bad rotation.
+        if (!(fabs(s) < 1.0)) {
+            break;
+        }
+
         if (prevrotsin >= 0.0 && fabs(s) > prevrotsin) {
             break; // rotation should decrease each iteration
         }
@@ -640,12 +647,57 @@ float Calibration::applyFBCorrection(const float *fwdBearings, const float *bwdB
         return amplitudeF;
     }
 
+    // ── Fit-quality guards: measure the amplitude but refuse to modify the
+    // calibration when the fit can't be trusted ──
+
+    // Two pairs is an exact fit through noise (2 equations, 2 unknowns)
+    if (numPairs < 3) {
+        Serial.println(F("FB correction: need >=3 pairs — NOT applied"));
+        return amplitudeF;
+    }
+
+    // Bearings clustered in one sector make the 2-param sinusoid fit an
+    // extrapolation — require a reasonable spread of shot directions
+    double maxSep = 0.0;
+    for (int i = 0; i < numPairs; i++) {
+        for (int j = i + 1; j < numPairs; j++) {
+            double sep = fabs(fmod(fabs((double)fwdBearings[i] - (double)fwdBearings[j]), 360.0));
+            if (sep > 180.0) {
+                sep = 360.0 - sep;
+            }
+            if (sep > maxSep) {
+                maxSep = sep;
+            }
+        }
+    }
+    if (maxSep < 45.0) {
+        Serial.print(F("FB correction: bearing spread only "));
+        Serial.print((float)maxSep, 1);
+        Serial.println(F(" deg (need >=45) — NOT applied"));
+        return amplitudeF;
+    }
+
+    // If the sinusoid doesn't actually explain the errors, the offset
+    // estimate is untrustworthy (blunder pair, or error isn't hard-iron)
+    Eigen::VectorXd residual = errors - A * ab;
+    double rms = sqrt(residual.squaredNorm() / (double)numPairs);
+    Serial.print(F("FB correction: residual RMS="));
+    Serial.print((float)rms, 3);
+    Serial.println(F(" deg"));
+    if (rms > amplitude) {
+        Serial.println(F("FB correction: residuals exceed fitted amplitude — NOT applied"));
+        return amplitudeF;
+    }
+
     // Step 4: Convert sinusoidal params to correction in calibrated frame
-    // The bearing error from a hard-iron offset δ in the calibrated mag frame is:
-    //   error(θ) ≈ (-δ_north·sin(θ) + δ_east·cos(θ)) / H_horizontal
+    // The bearing error from a hard-iron offset δ in the calibrated mag frame
+    // (device X ≈ east, Y ≈ north at θ=0) is, from linearising getAngles():
+    //   error(θ) ≈ -(δ_north·sin(θ) + δ_east·cos(θ)) / H_horizontal
     // Matching to error = a·sin(θ) + b·cos(θ):
     //   δ_north = -a · H_horizontal
-    //   δ_east  =  b · H_horizontal
+    //   δ_east  = -b · H_horizontal
+    // (Sign convention pinned by test_applyFBCorrection_recovers_injected_offset
+    // in test/test_mag_cal — a round-trip through this file's own getAngles.)
     //
     // In the calibrated frame, mag data is normalized to unit sphere, so H ≈ 1.
     // The orientation matrix rows are [east, north, upward], so the correction
@@ -664,11 +716,11 @@ float Calibration::applyFBCorrection(const float *fwdBearings, const float *bwdB
     }
 
     // Correction vector in calibrated frame (east, north, up)
-    // error(θ) = (-δN·sin(θ) + δE·cos(θ)) / H_horiz
+    // error(θ) = -(δN·sin(θ) + δE·cos(θ)) / H_horiz
     // so: a = -δN/H_horiz → δN = -a·H_horiz
-    //     b =  δE/H_horiz → δE =  b·H_horiz
+    //     b = -δE/H_horiz → δE = -b·H_horiz
     double delta_north = -a * H_horiz * DEG2RAD_D; // convert from degrees to radians
-    double delta_east = b * H_horiz * DEG2RAD_D;
+    double delta_east = -b * H_horiz * DEG2RAD_D;
     double delta_up = 0.0;
 
     // The calibrated mag vector = transform^T * (fixAxes(raw) - centre)

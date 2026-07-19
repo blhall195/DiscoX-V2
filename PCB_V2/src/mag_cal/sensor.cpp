@@ -249,6 +249,11 @@ float Sensor::fitEllipsoid(const std::vector<Eigen::Vector3f> &data) {
     // Fit ax² + by² + cz² + 2dxy + 2exz + 2fyz + 2gx + 2hy + 2iz = 1
     const int N = (int)data.size();
 
+    // 9 unknowns — fewer points than that is underdetermined
+    if (N < 9) {
+        return -1.0f;
+    }
+
     // Fix axes on all data (promote to double)
     std::vector<Eigen::Vector3d> fixed(N);
     for (int i = 0; i < N; i++) {
@@ -290,6 +295,9 @@ float Sensor::fitEllipsoid(const std::vector<Eigen::Vector3f> &data) {
     // Compute centre: solve A3 * centre = [-g, -h, -i]
     Eigen::Vector3d rhs(-g, -h, -iv);
     Eigen::Vector3d centreD = A3.colPivHouseholderQr().solve(rhs);
+    if (!centreD.allFinite()) {
+        return -1.0f; // degenerate quadric (e.g. coplanar points)
+    }
 
     // Build T matrix for similarity transform
     Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
@@ -308,10 +316,19 @@ float Sensor::fitEllipsoid(const std::vector<Eigen::Vector3f> &data) {
     Eigen::Vector3d eigenValues = solver.eigenvalues();
     Eigen::Matrix3d eigenVectors = solver.eigenvectors();
 
+    // A real ellipsoid has three strictly positive eigenvalues. Zero/negative
+    // (or NaN) means the fitted quadric is degenerate — clustered points or a
+    // missed region of the sphere. Taking fabs() here would silently turn
+    // that into a plausible-looking garbage transform, so fail instead and
+    // leave the current calibration untouched.
+    if (!eigenValues.allFinite() || eigenValues.minCoeff() <= 0.0) {
+        return -1.0f;
+    }
+
     // transform = V * sqrt(diag(eigenvalues)) * V^T
     Eigen::Matrix3d sqrtDiag = Eigen::Matrix3d::Zero();
     for (int i = 0; i < 3; i++) {
-        sqrtDiag(i, i) = sqrt(fabs(eigenValues[i]));
+        sqrtDiag(i, i) = sqrt(eigenValues[i]);
     }
     Eigen::Matrix3d transformD = eigenVectors * sqrtDiag * eigenVectors.transpose();
 

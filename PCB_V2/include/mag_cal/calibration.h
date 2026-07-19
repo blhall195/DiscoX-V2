@@ -114,7 +114,10 @@ class Calibration {
     /// Takes arrays of foresight and backsight bearings (degrees) and pair count.
     /// Fits sinusoidal error model: error = a*sin(θ) + b*cos(θ).
     /// Returns estimated residual amplitude in degrees (0 = perfect).
-    /// If amplitude >= threshold, adjusts mag_.centre_ to compensate.
+    /// Adjusts mag_.centre_ to compensate only when the fit is trustworthy:
+    /// amplitude >= minAmplitude, >= 3 pairs, bearing spread >= 45°, and
+    /// residual RMS below the fitted amplitude. Otherwise the amplitude is
+    /// returned for display but the calibration is left untouched.
     float applyFBCorrection(const float *fwdBearings, const float *bwdBearings, int numPairs,
                             float minAmplitude = 0.5f);
 

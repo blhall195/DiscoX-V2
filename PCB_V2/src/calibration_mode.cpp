@@ -55,12 +55,8 @@ void CalibrationMode::begin(ButtonManager &btns, DisplayManager &disp, DiscoMana
         Serial.println(F("Calibration mode: Part 1 (Ellipsoid)"));
         state_ = CalibState::INTRO_ELLIPSOID;
         showEllipsoidIntro();
-    } else if (mode == CalMode::PART2_ALIGNMENT) {
-        Serial.println(F("Calibration mode: Part 2 (Alignment)"));
-        state_ = CalibState::INTRO_ALIGNMENT;
-        showAlignmentIntro();
     } else {
-        Serial.println(F("Calibration mode: Short Calibration"));
+        Serial.println(F("Calibration mode: Part 2 (Alignment)"));
         state_ = CalibState::INTRO_ALIGNMENT;
         showAlignmentIntro();
     }
@@ -95,9 +91,6 @@ bool CalibrationMode::update() {
         break;
     case CalibState::CALCULATING_ALIGNMENT:
         updateCalculatingAlignment();
-        break;
-    case CalibState::CALCULATING_SHORT:
-        updateCalculatingShort();
         break;
     case CalibState::SHOW_RESULTS:
         updateShowResults();
@@ -334,38 +327,15 @@ void CalibrationMode::updateCalculatingAlignment() {
     showResultsScreen();
 }
 
-// ── State: CALCULATING_SHORT ────────────────────────────────────────
-
-void CalibrationMode::updateCalculatingShort() {
-    // Show calculating message
-    auto &d = disp_->getDisplay();
-    d.clearDisplay();
-    d.setTextColor(SH110X_WHITE);
-    d.setTextSize(2);
-    d.setCursor(0, 50);
-    d.print(F("Calculating..."));
-    d.display();
-
-    // Step 1: Update ellipsoid with the 24 alignment points
-    Serial.println(F("Short cal: updating ellipsoid with 24 points..."));
-    calculateEllipsoid();
-
-    // Step 2: Run alignment on the same 24 points
-    Serial.println(F("Short cal: running alignment..."));
-    calculateAlignment();
-
-    state_ = CalibState::SHOW_RESULTS;
-    showResultsScreen();
-}
-
 // ── State: SHOW_RESULTS ─────────────────────────────────────────────
 
 void CalibrationMode::updateShowResults() {
-    // Hold FIRE+UP_DISCO to save, hold UP_DISCO alone to discard
+    // Hold FIRE+UP_DISCO to save, hold UP_DISCO alone to discard.
+    // A failed ellipsoid fit can only be discarded — never saved.
     bool b1 = btns_->isPressed(Button::FIRE);
     bool b2 = btns_->isPressed(Button::UP_DISCO);
 
-    if (b1 && b2) {
+    if (b1 && b2 && !ellipsoidFitFailed()) {
         holdCounter_ += 0.01f;
         if (holdCounter_ >= HOLD_TIME) {
             Serial.println(F("Saving calibration..."));
@@ -560,7 +530,7 @@ void CalibrationMode::acceptPoint(const Eigen::Vector3f &mag, const Eigen::Vecto
     delay(200);
     disco_->turnOff();
 
-    // Alignment/short cal: laser off for 500ms then back on (visual feedback)
+    // Alignment: laser off for 500ms then back on (visual feedback)
     if (state_ == CalibState::COLLECTING_ALIGNMENT) {
         laser_->setLaser(false);
         laserWibbleActive_ = true;
@@ -572,8 +542,6 @@ void CalibrationMode::acceptPoint(const Eigen::Vector3f &mag, const Eigen::Vecto
         Serial.println(F("Collection complete. Calculating..."));
         if (state_ == CalibState::COLLECTING_ELLIPSOID) {
             state_ = CalibState::CALCULATING_ELLIPSOID;
-        } else if (calMode_ == CalMode::SHORT) {
-            state_ = CalibState::CALCULATING_SHORT;
         } else {
             state_ = CalibState::CALCULATING_ALIGNMENT;
         }
@@ -761,6 +729,26 @@ void CalibrationMode::showResultsScreen() {
     char buf[24];
     d.setTextSize(1);
 
+    if (ellipsoidFitFailed()) {
+        d.setTextSize(2);
+        d.setCursor(0, 0);
+        d.println(F("Fit FAILED"));
+
+        d.setTextSize(1);
+        d.setCursor(0, 30);
+        d.println(F("Point coverage too"));
+        d.println(F("poor to fit an"));
+        d.println(F("ellipsoid. Redo with"));
+        d.println(F("more spread poses."));
+
+        d.setCursor(0, 84);
+        d.println(F("Hold B2: Discard+Restart"));
+        d.display();
+
+        Serial.println(F("Ellipsoid fit FAILED — hold DISCO to discard"));
+        return;
+    }
+
     if (calMode_ == CalMode::PART1_ELLIPSOID) {
         // Title
         d.setTextSize(2);
@@ -868,6 +856,11 @@ void CalibrationMode::calculateEllipsoid() {
     auto result = cal_->fitEllipsoid(magArray_, gravArray_);
     resultMagAcc_ = result.first;
     resultGravAcc_ = result.second;
+
+    if (ellipsoidFitFailed()) {
+        Serial.println(F("ERROR: ellipsoid fit degenerate — point coverage too poor"));
+        return;
+    }
 
     // Set field characteristics for anomaly detection
     cal_->setFieldCharacteristics(magArray_, gravArray_);
