@@ -462,7 +462,11 @@ void MenuManager::testCalSave(int) {
                     gravData);
 
     // 2. Real Part 1 fit
-    MagCal::Calibration testCal(MAG_AXES, GRAV_AXES);
+    // static: the loop-task stack can't take ~3 KB of locals (the crash on
+    // first release of this feature) — keep the big objects in .bss and
+    // reinitialise on every run
+    static MagCal::Calibration testCal;
+    testCal = MagCal::Calibration(MAG_AXES, GRAV_AXES);
     auto fitRes = testCal.fitEllipsoid(magData, gravData);
     if (fitRes.first < 0.0f || fitRes.second < 0.0f || fitRes.first > 0.05f || fitRes.second > 0.05f) {
         failStep = "fit";
@@ -471,7 +475,7 @@ void MenuManager::testCalSave(int) {
     }
 
     // 3. Same serialization as CalibrationMode::saveCalibration()
-    char jsonBuf[2048];
+    static char jsonBuf[2048]; // static — see stack note above
     size_t jsonLen = 0;
     if (!failStep) {
         JsonDocument doc;
@@ -493,7 +497,7 @@ void MenuManager::testCalSave(int) {
         failStep = "flash JSON";
     }
     if (!failStep) {
-        MagCal::CalibrationBinary bin;
+        static MagCal::CalibrationBinary bin; // static — see stack note above
         testCal.toBinary(bin);
         if (!cfg->testFileRoundTrip(reinterpret_cast<const uint8_t *>(&bin), sizeof(bin))) {
             failStep = "flash binary";

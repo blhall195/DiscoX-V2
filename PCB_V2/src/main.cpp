@@ -259,7 +259,6 @@ void setup() {
     }
 
     // Normal boot — show splash screen
-    uint32_t splashStart = millis();
     display.showSplash(false);
 
     Serial.begin(115200);
@@ -340,9 +339,15 @@ void setup() {
     initDisco();
 
     // ── Splash sequence: off(200) → on(300) → off(200) → on(750) = 1450ms
+    // Timed from its own start, NOT from the early static splash: init work
+    // and any boot warning screens (NOT CALIBRATED / FLASH RECOVERED /
+    // STORAGE DEGRADED, up to several seconds) used to consume the shared
+    // window, silently skipping the whole animation — and the BLE name,
+    // which is only drawn here.
     {
+        uint32_t animStart = millis();
         auto splashLaser = [&]() -> bool {
-            uint32_t t = millis() - splashStart;
+            uint32_t t = millis() - animStart;
             if (t < 200) {
                 return false; // off  200ms
             }
@@ -360,7 +365,7 @@ void setup() {
             nameSuffix++; // skip the '_'
         }
 
-        while (millis() - splashStart < 1450) {
+        while (millis() - animStart < 1450) {
             display.showSplash(splashLaser(), nameSuffix);
         }
     }
