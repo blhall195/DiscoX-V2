@@ -313,6 +313,42 @@ bool ConfigManager::saveCalibrationBinary(const MagCal::CalibrationBinary &data)
                            sizeof(data));
 }
 
+bool ConfigManager::testFileRoundTrip(const uint8_t *data, size_t len) {
+    if (!mounted_) {
+        return false;
+    }
+    if (!writeFileAtomic("/savetest.bin", "/svt_tmp", data, len)) {
+        return false;
+    }
+
+    File f(InternalFS);
+    if (!f.open("/savetest.bin", FILE_O_READ)) {
+        return false;
+    }
+    bool ok = ((size_t)f.size() == len);
+    uint8_t buf[64];
+    size_t off = 0;
+    while (ok && off < len) {
+        size_t chunk = len - off;
+        if (chunk > sizeof(buf)) {
+            chunk = sizeof(buf);
+        }
+        int n = f.read(buf, (uint32_t)chunk);
+        if (n <= 0) {
+            ok = false;
+            break;
+        }
+        ok = (memcmp(buf, data + off, (size_t)n) == 0);
+        off += (size_t)n;
+    }
+    if (ok) {
+        ok = (off == len);
+    }
+    f.close();
+    InternalFS.remove("/savetest.bin");
+    return ok;
+}
+
 bool ConfigManager::storageWriteTest() {
     if (!mounted_) {
         return false;

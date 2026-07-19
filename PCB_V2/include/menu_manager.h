@@ -88,6 +88,7 @@ class MenuManager {
     static void setAutoShutdown(int value);
     static void enterFBCheck(int);
     static void viewLastCal(int);
+    static void testCalSave(int);
     static void enterSnakeGame(int);
     static void enterBootloader(int);
     static void enterUsbDrive(int);

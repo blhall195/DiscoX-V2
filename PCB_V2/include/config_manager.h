@@ -105,6 +105,12 @@ class ConfigManager {
     // end of a calibration. Costs a few metadata commits per boot.
     bool storageWriteTest();
 
+    // Write `len` bytes through the same atomic path as calibration saves,
+    // read them back, verify byte-for-byte, then delete the scratch file.
+    // Used by the menu's calibration save dry-run — never touches the real
+    // /calibration.{json,bin}.
+    bool testFileRoundTrip(const uint8_t *data, size_t len);
+
     // Count lines in /pending.txt + RAM buffer.
     uint16_t countPendingReadings();
 

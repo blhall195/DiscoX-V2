@@ -1,5 +1,8 @@
 #include "menu_manager.h"
 #include "config.h"
+#include "mag_cal/calibration.h"
+#include <math.h>
+#include <vector>
 
 MenuManager *MenuManager::s_instance = nullptr;
 
@@ -139,6 +142,7 @@ void MenuManager::buildMenu() {
     _calSub.addSubmenu("Enter Calibration", &_longCalSub);
     _calSub.addAction("Mag Field Check", enterFBCheck);
     _calSub.addAction("View Last Cal", viewLastCal);
+    _calSub.addAction("Test Save", testCalSave);
     _calSub.addAction("<- Back", goToRoot);
 
     // ── Enter Calibration (Part 1/2) submenu ────────────────────
@@ -401,6 +405,144 @@ void MenuManager::viewLastCal(int) {
     }
 
     d.display();
+    s_instance->_viewingCalMetrics = true;
+    s_instance->_lastActivity = millis();
+}
+
+// ── Calibration save dry-run ─────────────────────────────────────────
+// Fits a real ellipsoid to synthetic data, then round-trips payloads of
+// the same size and shape as a genuine Part 1 save through the real flash
+// write path — WITHOUT touching /calibration.{json,bin}. Lets the user
+// verify storage health before investing in a 56-point calibration.
+
+static void fibonacciSphere(int n, float radius, const Eigen::Vector3f &centre,
+                            const Eigen::Vector3f &scale, std::vector<Eigen::Vector3f> &out) {
+    const float goldenAngle = 2.39996323f;
+    out.clear();
+    out.reserve(n);
+    for (int i = 0; i < n; i++) {
+        float z = 1.0f - 2.0f * (i + 0.5f) / (float)n;
+        float r = sqrtf(1.0f - z * z);
+        float th = goldenAngle * (float)i;
+        Eigen::Vector3f u(r * cosf(th) * scale[0], r * sinf(th) * scale[1], z * scale[2]);
+        out.push_back(radius * u + centre);
+    }
+}
+
+void MenuManager::testCalSave(int) {
+    if (!s_instance) {
+        return;
+    }
+    auto &d = *s_instance->_display;
+    ConfigManager *cfg = s_instance->_cfgMgr;
+
+    d.clearDisplay();
+    d.setTextColor(SH110X_WHITE);
+    d.setTextSize(2);
+    d.setCursor(0, 40);
+    d.println(F("Save test"));
+    d.setTextSize(1);
+    d.println();
+    d.println(F("Fitting + writing..."));
+    d.display();
+
+    Serial.println(F("Menu: calibration save dry-run"));
+    uint32_t t0 = millis();
+
+    bleRadioQuiet(true); // same radio state as a real calibration-mode save
+
+    const char *failStep = nullptr;
+
+    // 1. Synthetic 56-point dataset at plausible field magnitudes, with a
+    //    hard-iron offset and mild soft-iron scaling so the fit is honest
+    std::vector<Eigen::Vector3f> magData, gravData;
+    fibonacciSphere(56, 48.0f, Eigen::Vector3f(2.0f, -1.5f, 3.0f), Eigen::Vector3f(1.05f, 0.95f, 1.0f),
+                    magData);
+    fibonacciSphere(56, 9.81f, Eigen::Vector3f(0.1f, -0.05f, 0.2f), Eigen::Vector3f(1.02f, 0.98f, 1.0f),
+                    gravData);
+
+    // 2. Real Part 1 fit
+    MagCal::Calibration testCal(MAG_AXES, GRAV_AXES);
+    auto fitRes = testCal.fitEllipsoid(magData, gravData);
+    if (fitRes.first < 0.0f || fitRes.second < 0.0f || fitRes.first > 0.05f || fitRes.second > 0.05f) {
+        failStep = "fit";
+    } else {
+        testCal.setFieldCharacteristics(magData, gravData);
+    }
+
+    // 3. Same serialization as CalibrationMode::saveCalibration()
+    char jsonBuf[2048];
+    size_t jsonLen = 0;
+    if (!failStep) {
+        JsonDocument doc;
+        JsonObject root = doc.to<JsonObject>();
+        testCal.toJson(root);
+        size_t required = measureJson(doc);
+        if (required == 0 || required >= sizeof(jsonBuf)) {
+            failStep = "serialize";
+        } else {
+            jsonLen = serializeJson(doc, jsonBuf, sizeof(jsonBuf));
+            if (jsonLen != required) {
+                failStep = "serialize";
+            }
+        }
+    }
+
+    // 4. Round-trip both payloads through the real flash write path
+    if (!failStep && !cfg->testFileRoundTrip(reinterpret_cast<const uint8_t *>(jsonBuf), jsonLen)) {
+        failStep = "flash JSON";
+    }
+    if (!failStep) {
+        MagCal::CalibrationBinary bin;
+        testCal.toBinary(bin);
+        if (!cfg->testFileRoundTrip(reinterpret_cast<const uint8_t *>(&bin), sizeof(bin))) {
+            failStep = "flash binary";
+        }
+    }
+
+    bleRadioQuiet(false);
+    uint32_t dt = millis() - t0;
+
+    if (failStep) {
+        Serial.print(F("Save dry-run FAILED at: "));
+        Serial.println(failStep);
+    } else {
+        Serial.print(F("Save dry-run PASSED — "));
+        Serial.print(jsonLen);
+        Serial.print(F(" JSON bytes round-tripped in "));
+        Serial.print(dt);
+        Serial.println(F(" ms"));
+    }
+
+    // 5. Result screen — any button returns to the menu (viewLastCal pattern)
+    d.clearDisplay();
+    d.setTextColor(SH110X_WHITE);
+    d.setTextSize(2);
+    d.setCursor(0, 0);
+    d.println(F("Save test"));
+    d.setCursor(0, 24);
+    d.println(failStep ? F("FAILED") : F("PASSED"));
+
+    d.setTextSize(1);
+    d.setCursor(0, 52);
+    if (failStep) {
+        d.print(F("Failed step: "));
+        d.println(failStep);
+        d.println();
+        d.println(F("Fix: Menu > Settings"));
+        d.println(F("> Reformat Storage"));
+    } else {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%u B in %lu ms", (unsigned)jsonLen, (unsigned long)dt);
+        d.println(buf);
+        d.println();
+        d.println(F("Storage is healthy -"));
+        d.println(F("safe to calibrate."));
+    }
+    d.setCursor(0, 100);
+    d.println(F("Any button to return"));
+    d.display();
+
     s_instance->_viewingCalMetrics = true;
     s_instance->_lastActivity = millis();
 }
