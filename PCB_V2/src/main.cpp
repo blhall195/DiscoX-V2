@@ -1812,7 +1812,18 @@ static void initFlash() {
 
         // Write self-test: a corrupt filesystem can mount and read fine while
         // every commit fails — warn at boot rather than at save time.
-        if (!configMgr.storageWriteTest()) {
+        // Retried before warning: single flash ops can hiccup transiently
+        // (cold-boot rail settling etc.), and that must not cry wolf — the
+        // genuine zombie-FS state fails deterministically on every attempt.
+        bool storageOk = false;
+        for (int i = 0; i < 3 && !storageOk; i++) {
+            if (i > 0) {
+                Serial.println(F("  self-test retrying..."));
+                delay(50);
+            }
+            storageOk = configMgr.storageWriteTest();
+        }
+        if (!storageOk) {
             Serial.println(F("  ** STORAGE DEGRADED: write self-test FAILED — reformat advised"));
             if (dispOk) {
                 display.blankScreen();

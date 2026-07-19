@@ -357,7 +357,11 @@ bool ConfigManager::storageWriteTest() {
     if (!writeFileAtomic("/fs_selftest", "/fst_tmp", probe, sizeof(probe))) {
         return false;
     }
-    return InternalFS.remove("/fs_selftest");
+    if (!InternalFS.remove("/fs_selftest")) {
+        Serial.println(F("  self-test remove FAILED"));
+        return false;
+    }
+    return true;
 }
 
 bool ConfigManager::removeCalibrationBinary() {
