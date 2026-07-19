@@ -49,6 +49,12 @@ void CalibrationMode::begin(ButtonManager &btns, DisplayManager &disp, DiscoMana
     // Turn on laser for calibration
     laser_->setLaser(true);
 
+    // Silence BLE advertising for the whole session: SoftDevice flash ops
+    // fail under radio contention (core HAL ignores the error event), which
+    // made calibration saves fail transiently. Resumed by main.cpp when
+    // calibration mode finishes; reboot exits reset the radio anyway.
+    bleRadioQuiet(true);
+
     calMode_ = mode;
 
     if (mode == CalMode::PART1_ELLIPSOID) {
@@ -1002,6 +1008,9 @@ void CalibrationMode::beginFBCheck(ButtonManager &btns, DisplayManager &disp, Di
 
     // Turn on laser
     laser_->setLaser(true);
+
+    // Same radio quiesce as begin() — the F/B save writes flash too
+    bleRadioQuiet(true);
 
     Serial.println(F("F/B field check mode started"));
     state_ = CalibState::FB_INTRO;

@@ -24,7 +24,7 @@ using namespace Adafruit_LittleFS_Namespace;
 // removes the target first (same lesson as the DiscoX nvm_manager).
 
 // Atomic byte-blob write: data → tmpPath, then rename over path.
-static bool writeFileAtomic(const char *path, const char *tmpPath, const uint8_t *data, size_t len) {
+static bool writeFileAtomicOnce(const char *path, const char *tmpPath, const uint8_t *data, size_t len) {
     InternalFS.remove(tmpPath); // FILE_O_WRITE won't truncate leftovers
 
     File file(InternalFS);
@@ -54,6 +54,22 @@ static bool writeFileAtomic(const char *path, const char *tmpPath, const uint8_t
         }
     }
     return true;
+}
+
+static bool writeFileAtomic(const char *path, const char *tmpPath, const uint8_t *data, size_t len) {
+    // SoftDevice flash ops fail transiently under BLE radio load and the
+    // core's flash HAL ignores the error event (see bleRadioQuiet in
+    // config.h) — a short-spaced retry usually lands in a radio gap.
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+            Serial.println(F("  flash write retrying..."));
+            delay(75);
+        }
+        if (writeFileAtomicOnce(path, tmpPath, data, len)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // ── begin() ────────────────────────────────────────────────────────

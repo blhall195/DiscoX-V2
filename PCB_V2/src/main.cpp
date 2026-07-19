@@ -663,6 +663,7 @@ void loop() {
                 sensorMgr.init(&calibration, ctx.config.emaAlphaStable, ctx.config.emaAlphaMoving,
                                ctx.config.stabilityBufferLength, Defaults::emaJumpThreshold);
             }
+            bleRadioQuiet(false); // resume advertising silenced by calMode.begin()
             display.initScreen();
             laserOn();
             ctx.lastActivityTime = millis();
@@ -1535,6 +1536,20 @@ static void doShutdown() {
 
 // Shared power-off hook (declared in config.h) for menu/snake timeout paths
 void systemPowerOff() { doShutdown(); }
+
+// Radio-quiet hook (declared in config.h) — calibration mode silences
+// advertising for its whole session so LittleFS commits can't collide with
+// radio timeslots (the core's flash HAL ignores SoftDevice flash errors).
+void bleRadioQuiet(bool quiet) {
+    if (!bleOk) {
+        return;
+    }
+    if (quiet) {
+        ble.pauseAdvertising();
+    } else {
+        ble.resumeAdvertising();
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // ── USB Mass Storage Drive Mode (V2: internal-flash FAT partition) ─

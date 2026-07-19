@@ -55,6 +55,20 @@ class BleManager {
     // Change advertised name (used by the settings menu / app rename flow)
     void setName(const char *name);
 
+    // Radio quiesce for flash-write windows. SoftDevice flash ops fail under
+    // radio contention and the core's flash HAL IGNORES the error event
+    // (flash_nrf5x_event_cb gives the semaphore regardless — the check is
+    // commented out upstream), so heavy LittleFS commits under advertising
+    // fail transiently or, worse, tear silently. Advertising serves no
+    // purpose during calibration mode anyway. No effect on a live
+    // connection (not advertising then); resume is a no-op while connected.
+    void pauseAdvertising() { Bluefruit.Advertising.stop(); }
+    void resumeAdvertising() {
+        if (!Bluefruit.connected() && !Bluefruit.Advertising.isRunning()) {
+            Bluefruit.Advertising.start(0);
+        }
+    }
+
     // Inbound
     bool hasCommand() const { return _pendingCmd != BleCommand::NONE; }
     BleCommand readCommand(); // Returns & clears pending command

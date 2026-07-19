@@ -63,6 +63,11 @@ constexpr char GRAV_AXES[] = "+Y-X-Z";
 // used to write V1's PIN_POWER directly.
 void systemPowerOff();
 
+// Defined in main.cpp: pause/resume BLE advertising around flash-heavy
+// windows (calibration mode). SoftDevice flash ops fail under radio
+// contention and the core's flash HAL ignores the error — see ble_manager.h.
+void bleRadioQuiet(bool quiet);
+
 // ── Unit conversion ─────────────────────────────────────────────────
 // The SCA3300 reports acceleration in g; the whole V1 pipeline (calibration
 // fitting, shake detection, field-strength stats) was built on the
