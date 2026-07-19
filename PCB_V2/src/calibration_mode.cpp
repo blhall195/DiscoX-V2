@@ -383,10 +383,24 @@ void CalibrationMode::updateSaving() {
         d.clearDisplay();
         d.setTextColor(SH110X_WHITE);
         d.setTextSize(2);
-        d.setCursor(10, 50);
+        d.setCursor(10, 40);
         d.print(F("Save FAIL"));
+        d.setTextSize(1);
+        d.setCursor(0, 70);
+        d.println(F("Storage error - fit"));
+        d.println(F("kept. Retry save, or"));
+        d.println(F("reformat storage via"));
+        d.println(F("Settings menu."));
         d.display();
-        delay(1500);
+        delay(3000);
+
+        // Keep the fitted calibration and collected data — go back to the
+        // results screen so the user can retry the save or discard, rather
+        // than silently marching on (Part 1 → Part 2) or rebooting.
+        holdCounter_ = 0.0f;
+        state_ = CalibState::SHOW_RESULTS;
+        showResultsScreen();
+        return;
     }
     // After Part 1 save, automatically transition into Part 2 (alignment)
     if (calMode_ == CalMode::PART1_ELLIPSOID) {
@@ -1277,10 +1291,22 @@ void CalibrationMode::updateFBSaving() {
         d.clearDisplay();
         d.setTextColor(SH110X_WHITE);
         d.setTextSize(2);
-        d.setCursor(10, 50);
+        d.setCursor(10, 40);
         d.print(F("Save FAIL"));
+        d.setTextSize(1);
+        d.setCursor(0, 70);
+        d.println(F("Storage error - kept"));
+        d.println(F("in RAM. Retry save"));
+        d.println(F("or discard."));
         d.display();
-        delay(1500);
+        delay(3000);
+
+        // Keep the corrected calibration in RAM and return to the results
+        // screen — rebooting here would discard the F/B correction.
+        holdCounter_ = 0.0f;
+        state_ = CalibState::FB_RESULTS;
+        showFBResultsScreen();
+        return;
     }
 
     // Reboot to cleanly load corrected calibration

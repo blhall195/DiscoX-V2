@@ -99,6 +99,12 @@ class ConfigManager {
     // True if RAM buffer has unsaved readings.
     bool hasPendingToSync() const { return pendingBufCount_ > 0; }
 
+    // Boot-time write self-test: create + rename + remove a tiny probe file.
+    // A corrupt filesystem can mount and read fine while every commit fails
+    // (seen 2026-07-19) — this catches that state at boot instead of at the
+    // end of a calibration. Costs a few metadata commits per boot.
+    bool storageWriteTest();
+
     // Count lines in /pending.txt + RAM buffer.
     uint16_t countPendingReadings();
 

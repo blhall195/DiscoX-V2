@@ -764,6 +764,21 @@ static void readSensorsUpdate(uint32_t now) {
             if (!configMgr.printConfig(Serial)) {
                 Serial.println(F("(no config file — running on defaults)"));
             }
+        } else if (c == 'u' || c == 'U') {
+            // Clean bootloader entry for host-driven reflash. The 1200bps
+            // touch resets at an arbitrary instant and can tear an in-flight
+            // LittleFS commit (root cause of the 2026-07-19 storage
+            // corruption) — this path syncs storage first, then enters DFU
+            // with USB already up so the bootloader's 3 s window is safe.
+            // The upload skill sends 'u' before running pio upload.
+            Serial.println(F("Reflash: syncing storage, entering bootloader..."));
+            if (flashOk && configMgr.hasPendingToSync()) {
+                configMgr.syncPendingToFlash();
+            }
+            Serial.flush();
+            delay(100);
+            enterUf2Dfu();
+            // Does not return
         } else if (c == 'r' || c == 'R') {
             Serial.print(F("RAW mag uT  X="));
             Serial.print(lastMagX, 2);
@@ -1773,6 +1788,29 @@ static void initFlash() {
             configMgr.clearFlag(Flags::SNAKE);
             Serial.println(F("  ** Snake mode flag detected"));
             enterSnakeMode = true;
+        }
+
+        // Write self-test: a corrupt filesystem can mount and read fine while
+        // every commit fails — warn at boot rather than at save time.
+        if (!configMgr.storageWriteTest()) {
+            Serial.println(F("  ** STORAGE DEGRADED: write self-test FAILED — reformat advised"));
+            if (dispOk) {
+                display.blankScreen();
+                auto &disp = display.getDisplay();
+                disp.setTextColor(SH110X_WHITE);
+                disp.setTextSize(2);
+                disp.setCursor(0, 10);
+                disp.println(F("STORAGE"));
+                disp.println(F("DEGRADED"));
+                disp.setTextSize(1);
+                disp.println();
+                disp.println(F("Saving will fail."));
+                disp.println();
+                disp.println(F("Fix: Menu > Settings"));
+                disp.println(F("> Reformat Storage"));
+                disp.display();
+                delay(5000);
+            }
         }
     }
 

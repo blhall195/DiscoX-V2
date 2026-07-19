@@ -297,6 +297,17 @@ bool ConfigManager::saveCalibrationBinary(const MagCal::CalibrationBinary &data)
                            sizeof(data));
 }
 
+bool ConfigManager::storageWriteTest() {
+    if (!mounted_) {
+        return false;
+    }
+    static const uint8_t probe[1] = {0x5A};
+    if (!writeFileAtomic("/fs_selftest", "/fst_tmp", probe, sizeof(probe))) {
+        return false;
+    }
+    return InternalFS.remove("/fs_selftest");
+}
+
 bool ConfigManager::removeCalibrationBinary() {
     if (!mounted_) {
         return false;
