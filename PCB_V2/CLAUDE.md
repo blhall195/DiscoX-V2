@@ -194,6 +194,15 @@ on the USB task and must never interleave with loop-task filesystem writes.
    stale stored calibration shadows the new strings, re-calibrate
    (`calibration_mode.cpp` constructs from `MAG_AXES`/`GRAV_AXES`) or delete
    the stored files.
+
+   **Buzzer test console** (2026-07-15, `handleBuzzerTestLine` in
+   `main.cpp`): lines starting with `>` are buffered until `\n` and
+   dispatched as buzzer commands — `>TONE f ms`, `>SWEEP f0 f1 ms`,
+   `>MELODY f:ms,f:ms,...` (f=0 is a rest), `>SOUND name` (click, shot,
+   reading, leg, warning, error, snakestart, snakeeat, snakecrash), `>STOP`.
+   Kept behind the `>` prefix so it can't collide with the single-char `r`/
+   `s`/`c`/`f` commands above. Each command replies `OK`/`ERR ...` on
+   `Serial`.
 2. OLED electrically verified on hardware 2026-07-07 (I2C ACK + `begin()`,
    pattern cycle running) — this exposed that the V2 panel is at **0x3C**,
    not V1's 0x3D, so `SH1107_ADDR` (config.h) was corrected. Image since

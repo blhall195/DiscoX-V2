@@ -25,6 +25,9 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <strings.h>
 
 // ── Embedded calibration data ──────────────────────────────────────
 // From V1's calibration_dict.json (github.com/blhall195/Mr_Zappy) —
@@ -107,6 +110,15 @@ static float lastAccX = 0, lastAccY = 0, lastAccZ = 0;
 // stream so the snapshot lines are easy to copy.
 static bool teleplotEnabled = true;
 
+// ── Buzzer test console (browser GUI over Web Serial) ───────────────
+// Lines starting with '>' are buffered until '\n' and dispatched as buzzer
+// test commands (see handleBuzzerTestLine) — kept behind a distinct prefix
+// byte so it can never collide with the single-char commissioning commands
+// above, which stay immediate/unbuffered for raw terminal use.
+static char buzzTestLine[64];
+static uint8_t buzzTestLen = 0;
+static bool buzzTestActive = false;
+
 // ── Accel-derived motion detection (V2 has no gyro) ────────────────
 // V1 gated the fusion alpha and the display freeze on gyro magnitude; the
 // SCA3300 is accel-only, so motion is inferred from the deviation of the
@@ -183,6 +195,7 @@ static void checkLaserTimeout(uint32_t now);
 static void updateDisplay(uint32_t now);
 
 // ── Forward declarations — helpers ──────────────────────────────────
+static void handleBuzzerTestLine(char *line);
 static void showSplaysDisabledToast();
 static void handleMeasurementSuccess();
 static void alertError(const char *errCode);
@@ -742,9 +755,29 @@ static void readSensorsUpdate(uint32_t now) {
     }
 
     // Raw-axis snapshot for axis-mapping commissioning (press 'r')
-    if (Serial.available()) {
+    while (Serial.available()) {
         int c = Serial.read();
-        if (c == 's' || c == 'S') {
+
+        if (buzzTestActive) {
+            if (c == '\n' || c == '\r') {
+                if (buzzTestLen > 0) {
+                    buzzTestLine[buzzTestLen] = '\0';
+                    handleBuzzerTestLine(buzzTestLine);
+                    buzzTestLen = 0;
+                }
+                buzzTestActive = false;
+            } else if (buzzTestLen < sizeof(buzzTestLine) - 1) {
+                buzzTestLine[buzzTestLen++] = (char)c;
+            }
+            continue;
+        }
+
+        if (c == '>') {
+            // Start of a buffered buzzer-test command line — see
+            // handleBuzzerTestLine for the protocol.
+            buzzTestActive = true;
+            buzzTestLen = 0;
+        } else if (c == 's' || c == 'S') {
             teleplotEnabled = !teleplotEnabled;
             Serial.println(teleplotEnabled ? F("Teleplot stream ON") : F("Teleplot stream OFF"));
         } else if (c == 'f' || c == 'F') {
@@ -833,6 +866,108 @@ static void readSensorsUpdate(uint32_t now) {
                 }
             }
         }
+    }
+}
+
+// ── Buzzer test console ───────────────────────────────────────────
+// Protocol for the browser buzzer-tester GUI (Web Serial, 115200 8N1).
+// Lines are ASCII, whitespace-separated, dispatched from
+// handleBuzzerTestLine's caller once a trailing '\n' completes the line
+// buffered after a leading '>':
+//   >TONE <freqHz> <durationMs>
+//   >SWEEP <fromHz> <toHz> <durationMs>
+//   >MELODY <freq:ms>,<freq:ms>,...     (freq 0 = rest/silence)
+//   >SOUND <name>                       click|shot|reading|leg|warning|
+//                                        error|snakestart|snakeeat|snakecrash
+//   >STOP                               silence immediately (best-effort —
+//                                        the driver is a blocking bit-bang,
+//                                        so this only takes effect between
+//                                        notes, not mid-tone)
+// Every command prints "OK" or "ERR <reason>" when it returns so the GUI
+// can serialize sends and show status.
+static void handleBuzzerTestLine(char *line) {
+    char *save = nullptr;
+    char *cmd = strtok_r(line, " ", &save);
+    if (!cmd) {
+        return;
+    }
+
+    if (strcasecmp(cmd, "TONE") == 0) {
+        char *freqTok = strtok_r(nullptr, " ", &save);
+        char *msTok = strtok_r(nullptr, " ", &save);
+        if (!freqTok || !msTok) {
+            Serial.println(F("ERR usage: TONE <freqHz> <durationMs>"));
+            return;
+        }
+        buzzer.tone((uint32_t)atol(freqTok), (uint32_t)atol(msTok));
+        Serial.println(F("OK"));
+    } else if (strcasecmp(cmd, "SWEEP") == 0) {
+        char *fromTok = strtok_r(nullptr, " ", &save);
+        char *toTok = strtok_r(nullptr, " ", &save);
+        char *msTok = strtok_r(nullptr, " ", &save);
+        if (!fromTok || !toTok || !msTok) {
+            Serial.println(F("ERR usage: SWEEP <fromHz> <toHz> <durationMs>"));
+            return;
+        }
+        buzzer.sweep((uint32_t)atol(fromTok), (uint32_t)atol(toTok), (uint32_t)atol(msTok));
+        Serial.println(F("OK"));
+    } else if (strcasecmp(cmd, "MELODY") == 0) {
+        char *notes = strtok_r(nullptr, " ", &save);
+        if (!notes) {
+            Serial.println(F("ERR usage: MELODY <freq:ms>,<freq:ms>,..."));
+            return;
+        }
+        char *noteSave = nullptr;
+        char *note = strtok_r(notes, ",", &noteSave);
+        while (note) {
+            char *colon = strchr(note, ':');
+            if (colon) {
+                *colon = '\0';
+                uint32_t freq = (uint32_t)atol(note);
+                uint32_t ms = (uint32_t)atol(colon + 1);
+                if (freq == 0) {
+                    delay(ms);
+                } else {
+                    buzzer.tone(freq, ms);
+                }
+            }
+            note = strtok_r(nullptr, ",", &noteSave);
+        }
+        Serial.println(F("OK"));
+    } else if (strcasecmp(cmd, "SOUND") == 0) {
+        char *name = strtok_r(nullptr, " ", &save);
+        if (!name) {
+            Serial.println(F("ERR usage: SOUND <name>"));
+            return;
+        }
+        if (strcasecmp(name, "click") == 0) {
+            Sounds::click();
+        } else if (strcasecmp(name, "shot") == 0) {
+            Sounds::shotStart();
+        } else if (strcasecmp(name, "reading") == 0) {
+            Sounds::readingOk();
+        } else if (strcasecmp(name, "leg") == 0) {
+            Sounds::legComplete();
+        } else if (strcasecmp(name, "warning") == 0) {
+            Sounds::warning();
+        } else if (strcasecmp(name, "error") == 0) {
+            Sounds::error();
+        } else if (strcasecmp(name, "snakestart") == 0) {
+            Sounds::snakeStart();
+        } else if (strcasecmp(name, "snakeeat") == 0) {
+            Sounds::snakeEat(0);
+        } else if (strcasecmp(name, "snakecrash") == 0) {
+            Sounds::snakeCrash(0);
+        } else {
+            Serial.println(F("ERR unknown sound name"));
+            return;
+        }
+        Serial.println(F("OK"));
+    } else if (strcasecmp(cmd, "STOP") == 0) {
+        buzzer.off();
+        Serial.println(F("OK"));
+    } else {
+        Serial.println(F("ERR unknown command"));
     }
 }
 
