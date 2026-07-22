@@ -143,7 +143,10 @@ bool ConfigManager::loadConfig(Config &cfg) {
         return false;
     }
 
-    char buf[1024];
+    // static: the loop task has only a 4 KB stack and the LittleFS call
+    // chain runs below these frames — keep kilobyte buffers in .bss
+    // (see the stack note in CalibrationMode::saveCalibration)
+    static char buf[1024];
     int len = file.read(buf, sizeof(buf) - 1);
     file.close();
     if (len <= 0) {
@@ -228,7 +231,7 @@ bool ConfigManager::saveConfig(const Config &cfg) {
     doc["ble_name"] = nameToSave;
 
     // Serialize to a RAM buffer first, then write atomically.
-    char buf[1280];
+    static char buf[1280]; // static — 4 KB loop-task stack, see loadConfig note
     if (measureJsonPretty(doc) >= sizeof(buf)) {
         Serial.println(F("Config JSON too large for buffer"));
         return false;

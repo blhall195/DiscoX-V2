@@ -54,7 +54,7 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 |------|-----------|---------------|-----------|-----------|
 | Normal | take shot / wake laser | hold: disco toggle; short: splay shot | — | enter settings menu |
 | Menu | select | up | down | select |
-| Calibration | record point / F-B shot | finish F/B early; hold combos: save (FIRE+UP) / discard (UP) | any-button advance | undo last point |
+| Calibration | record point / F-B shot | finish F/B early; hold combos: save (FIRE+UP) / discard (UP) | undo last point / cancel capture (screen hint "B3:undo") | undo (alias of DOWN); any-button advance on intro screens |
 | Snake | turn left | turn right | exit | exit |
 
 Power on/off = the dedicated hardware button into the LTC2954 (H3 pin 4,
@@ -155,8 +155,26 @@ on the USB task and must never interleave with loop-task filesystem writes.
 - WS2812 DIN is on a "low-frequency-only" module pad (P0.31) — watch for RF
   degradation while BLE is active.
 - **Boot-button roles differ**: FIRE held at power-on = serial-debug wait +
-  I2C scan (pre-existing); **DOWN held at power-on = USB drive mode**. Don't
-  reassign either without updating the drive-mode recovery docs.
+  I2C scan (pre-existing); **DOWN held at power-on = USB drive mode**;
+  **DOWN+MENU held at power-on = storage factory reset** (confirm screen,
+  hold FIRE 3 s to erase — formats LittleFS without reading the old
+  metadata, the only route that recovers from corruption that hangs the
+  filesystem code itself). Don't reassign any of these without updating
+  the recovery docs. These button checks run BEFORE the first
+  `configMgr.begin()` in setup() — keep that order (see next gotcha).
+- **The loop task has a 4 KB stack — never put ≥1 KB of locals in code it
+  runs** (setup/loop and everything they call). `CalibrationMode::
+  saveCalibration()` had 2.5 KB of locals; at the deepest LittleFS write
+  (the metrics rename) it overflowed, smashed littlefs's heap buffers,
+  and littlefs committed CRC-valid garbage metadata to flash. Every boot
+  then hung at the first filesystem write (the storage self-test) walking
+  a fake 4 GB file — bricked device, 2026-07-22, recovered by dumping the
+  FS region over a rescue firmware. Overflow detection is FreeRTOS method
+  1 with a hook that continues in release builds, so nothing crashes at
+  the moment of overflow. Big buffers in this kind of code go in
+  `static`/.bss (see saveCalibration, initCalibration, config_manager,
+  MenuManager::testCalSave). `arm-none-eabi-objdump -d` on the .o and
+  check `sub sp` prologues if unsure.
 - **Menu → Update Firmware needs USB already connected**: the bootloader's
   `enterUf2Dfu()` GPREGRET (0x57) path gives USB only 3 s to enumerate
   before falling back into the app, so main.cpp waits for

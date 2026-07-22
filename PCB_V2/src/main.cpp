@@ -202,6 +202,7 @@ static void alertError(const char *errCode);
 static void resetLaser();
 static void doShutdown();
 static void enterUsbDriveMode(); // modal USB MSC settings drive — reboots on exit
+static void storageFactoryReset(); // boot combo DOWN+MENU — resets if confirmed
 static void onFlushReading(float az, float inc, float dist);
 
 const bool REGULAR_SHOT = false;
@@ -254,20 +255,36 @@ void setup() {
     // ── Early USB drive mode check ─────────────────────────────────
     // Must happen BEFORE any Serial use so the MSC interface is part of
     // the initial USB enumeration. Entered by EITHER the usb_drive flag
-    // (set from the menu) OR by holding DOWN (B3) at power-on. The button
-    // path needs no flash read/write, so it still works when LittleFS is
-    // broken — it's the recovery route to reformat the partition from a PC.
+    // (set from the menu) OR by holding DOWN (B3) at power-on.
     // (FIRE-at-boot is taken by the serial-debug hold below, hence DOWN.)
+    //
+    // Recovery ordering matters: corrupted LittleFS metadata can hang ANY
+    // filesystem call, mount included (the 2026-07-22 brick: CRC-valid
+    // garbage from a save-path stack overflow made the first write loop
+    // forever), so both button routes below are checked BEFORE the first
+    // configMgr.begin().
     {
-        flashOk = configMgr.begin(); // idempotent — initFlash() re-checks later
-        bool usbByFlag = flashOk && configMgr.hasFlag(Flags::USB_DRIVE);
-        bool usbByButton = (digitalRead(PIN_BTN_DOWN) == LOW);
-        if (usbByFlag || usbByButton) {
-            if (usbByFlag) {
-                configMgr.clearFlag(Flags::USB_DRIVE);
-            }
+        // DOWN+MENU held at power-on = storage factory reset. Formats the
+        // LittleFS region without ever reading the old metadata — the only
+        // route that works no matter how mangled the filesystem is.
+        if (digitalRead(PIN_BTN_DOWN) == LOW && digitalRead(PIN_BTN_MENU) == LOW) {
+            storageFactoryReset(); // modal — resets if confirmed, else returns
+        }
+
+        if (digitalRead(PIN_BTN_DOWN) == LOW) {
             UsbDrive::beginMsc(); // register MSC BEFORE the host enumerates
-            enterUsbDriveMode();  // modal — reboots or powers off, never returns
+            // Mount only after MSC is registered: if a corrupt FS wedges the
+            // loop task here, the FAT drive still enumerates (MSC runs on
+            // the USB task) so a PC can rescue/reformat the partition.
+            flashOk = configMgr.begin();
+            enterUsbDriveMode(); // modal — reboots or powers off, never returns
+        }
+
+        flashOk = configMgr.begin(); // idempotent — initFlash() re-checks later
+        if (flashOk && configMgr.hasFlag(Flags::USB_DRIVE)) {
+            configMgr.clearFlag(Flags::USB_DRIVE);
+            UsbDrive::beginMsc();
+            enterUsbDriveMode();
         }
     }
 
@@ -1698,6 +1715,72 @@ void bleRadioQuiet(bool quiet) {
 // LittleFS → FAT staging, then the host owns the volume until MENU is
 // pressed (import + reboot) or the device is powered off (the usb_import
 // flag makes the next boot import instead).
+// ── Storage factory reset (boot combo DOWN+MENU) ────────────────────
+// Last-resort recovery for LittleFS corruption that hangs the filesystem
+// code itself. Adafruit_LittleFS::format() on a never-mounted filesystem
+// only writes fresh superblocks — it does not read the old metadata — so
+// this works no matter how mangled the region is. Old blocks become
+// unreachable garbage that the allocator never visits.
+static void storageFactoryReset() {
+    if (dispOk) {
+        auto &d = display.getDisplay();
+        d.clearDisplay();
+        d.setTextColor(SH110X_WHITE);
+        d.setTextSize(2);
+        d.setCursor(0, 0);
+        d.println(F("STORAGE"));
+        d.println(F("RESET"));
+        d.setTextSize(1);
+        d.println();
+        d.println(F("Erases ALL settings"));
+        d.println(F("and calibration."));
+        d.println();
+        d.println(F("Hold FIRE 3s: erase"));
+        d.println(F("Wait 15s: cancel"));
+        d.display();
+    }
+
+    uint32_t start = millis();
+    uint32_t fireSince = 0;
+    while (millis() - start < 15000) {
+        if (digitalRead(PIN_BTN_FIRE) == LOW) {
+            if (fireSince == 0) {
+                fireSince = millis();
+            } else if (millis() - fireSince >= 3000) {
+                if (dispOk) {
+                    auto &d = display.getDisplay();
+                    d.clearDisplay();
+                    d.setTextColor(SH110X_WHITE);
+                    d.setTextSize(2);
+                    d.setCursor(0, 40);
+                    d.println(F("Erasing..."));
+                    d.display();
+                }
+                configMgr.reformat(); // pre-mount: writes fresh superblocks only
+                if (dispOk) {
+                    auto &d = display.getDisplay();
+                    d.clearDisplay();
+                    d.setTextColor(SH110X_WHITE);
+                    d.setTextSize(2);
+                    d.setCursor(0, 40);
+                    d.println(F("Done."));
+                    d.setCursor(0, 70);
+                    d.println(F("Restarting"));
+                    d.display();
+                }
+                delay(1000);
+                NVIC_SystemReset();
+                // Does not return
+            }
+        } else {
+            fireSince = 0;
+        }
+        delay(10);
+    }
+    // Timed out — treat as cancel and continue the normal boot (DOWN is
+    // still held, so this falls through into USB drive mode).
+}
+
 static void enterUsbDriveMode() {
     bool fatOk = UsbDrive::mountOrFormat();
     bool exportOk = fatOk && flashOk && UsbDrive::exportFiles(configMgr);
@@ -1991,7 +2074,10 @@ static void initCalibration() {
 
     // 1. Try binary from flash (fastest — no JSON parse)
     if (flashOk) {
-        MagCal::CalibrationBinary bin;
+        // static: this function had a 2 KB frame on the 4 KB loop-task
+        // stack (see the saveCalibration stack note) — keep the big
+        // buffers in .bss for headroom under the deserializer below
+        static MagCal::CalibrationBinary bin;
         if (configMgr.loadCalibrationBinary(bin)) {
             loaded = calibration.fromBinary(bin);
             if (loaded) {
@@ -2007,7 +2093,7 @@ static void initCalibration() {
 
     // 2. Fall back to JSON from flash
     if (!loaded && flashOk) {
-        char calBuf[2048];
+        static char calBuf[2048]; // static — see stack note above
         size_t calLen = 0;
         if (configMgr.loadCalibrationJson(calBuf, sizeof(calBuf), calLen)) {
             loaded = calibration.fromJson(calBuf, calLen);

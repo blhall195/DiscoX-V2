@@ -218,8 +218,21 @@ void CalibrationMode::updateCollecting() {
         disco_->setRed();
     }
 
-    // MENU button (B4) undoes the last recorded point
-    if (btns_->wasPressed(Button::MENU) && !waitingForStable_ && iteration_ > 0) {
+    // DOWN (B3, as shown on screen) or MENU (B4) undoes the last recorded
+    // point. Read both edges unconditionally — wasPressed() consumes the
+    // flag, so short-circuiting would leave a stale edge to fire later.
+    bool undoDown = btns_->wasPressed(Button::DOWN);
+    bool undoMenu = btns_->wasPressed(Button::MENU);
+    bool undoPressed = undoDown || undoMenu;
+
+    if (undoPressed && waitingForStable_) {
+        // Mid-capture: cancel the attempt (otherwise the 4 s stability
+        // timeout force-records a junk point and the press is lost)
+        waitingForStable_ = false;
+        settleStart_ = 0;
+        disco_->turnOff();
+        Serial.println(F("Capture attempt cancelled"));
+    } else if (undoPressed && iteration_ > 0) {
         magArray_.pop_back();
         gravArray_.pop_back();
         iteration_--;
@@ -1634,7 +1647,13 @@ bool CalibrationMode::saveCalibration() {
         return false;
     }
 
-    char jsonBuf[JSON_BUF_SIZE];
+    // static: the loop task has a 4 KB stack and the LittleFS commit path
+    // below this frame needs ~1.5 KB more — with these as locals the frame
+    // was 2.5 KB and the deepest write (the metrics rename) overflowed the
+    // stack, smashing littlefs's heap buffers so it committed CRC-valid
+    // garbage metadata; the next boot then hung traversing it (bricked
+    // device, 2026-07-22). Same fix as MenuManager::testCalSave.
+    static char jsonBuf[JSON_BUF_SIZE];
     size_t len = serializeJson(doc, jsonBuf, JSON_BUF_SIZE);
     if (len != required) {
         Serial.println(F("JSON serialization error"));
@@ -1650,7 +1669,7 @@ bool CalibrationMode::saveCalibration() {
     Serial.println(F(" bytes"));
 
     // Save binary to flash (fast boot path)
-    MagCal::CalibrationBinary bin;
+    static MagCal::CalibrationBinary bin; // static — see stack note above
     cal_->toBinary(bin);
     bool binOk = cfgMgr_->saveCalibrationBinary(bin);
     Serial.print(F("  Binary save: "));
