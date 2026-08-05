@@ -469,6 +469,99 @@ void setup() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// ── Button identify mode ('b' over serial) ────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// Reports which physical GPIO each press lands on, so the four buttons
+// can be re-mapped in config.h after a hardware rework. Reads the pins
+// directly (not ButtonManager) so the answer is independent of the
+// current — possibly wrong — role mapping, and short-circuits the loop
+// so presses don't fire the laser or open the menu while testing.
+static bool buttonIdentifyActive = false;
+
+struct IdentifyPin {
+    uint8_t pin;
+    const char *port; // module net name / nRF port pin
+    const char *macro;
+};
+
+static const IdentifyPin identifyPins[NUM_BUTTONS] = {
+    {PIN_BUTTON1, "P0.27", "PIN_BUTTON1"},
+    {PIN_BUTTON2, "P1.03", "PIN_BUTTON2"},
+    {PIN_BUTTON3, "P1.05", "PIN_BUTTON3"},
+    {PIN_BUTTON4, "P1.07", "PIN_BUTTON4"},
+};
+
+// Derived from the live config.h mapping, so the report can't go stale the
+// next time the roles are re-assigned.
+static const char *roleForPin(uint8_t pin) {
+    if (pin == PIN_BTN_FIRE) {
+        return ButtonManager::name(Button::FIRE);
+    }
+    if (pin == PIN_BTN_UP_DISCO) {
+        return ButtonManager::name(Button::UP_DISCO);
+    }
+    if (pin == PIN_BTN_DOWN) {
+        return ButtonManager::name(Button::DOWN);
+    }
+    if (pin == PIN_BTN_MENU) {
+        return ButtonManager::name(Button::MENU);
+    }
+    return "(unassigned)";
+}
+
+static void pollButtonIdentify() {
+    static bool wasDown[NUM_BUTTONS] = {false, false, false, false};
+    static uint32_t lastChange[NUM_BUTTONS] = {0, 0, 0, 0};
+
+    uint32_t now = millis();
+    for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+        bool down = (digitalRead(identifyPins[i].pin) == LOW);
+        if (down == wasDown[i]) {
+            continue;
+        }
+        if ((now - lastChange[i]) < Timing::BUTTON_DEBOUNCE_MS) {
+            continue;
+        }
+        lastChange[i] = now;
+        wasDown[i] = down;
+        if (!down) {
+            continue; // report presses only
+        }
+        Serial.print(F("BTN "));
+        Serial.print(identifyPins[i].macro);
+        Serial.print(F("  ("));
+        Serial.print(identifyPins[i].port);
+        Serial.print(F(", Arduino pin "));
+        Serial.print(identifyPins[i].pin);
+        Serial.print(F(")  currently mapped to: "));
+        Serial.println(roleForPin(identifyPins[i].pin));
+    }
+
+    // 'b' leaves the mode; 'u' must still work or a host can't reflash while
+    // identify mode is up (this loop otherwise eats every serial byte).
+    while (Serial.available()) {
+        int c = Serial.read();
+        if (c == 'b' || c == 'B') {
+            buttonIdentifyActive = false;
+            Serial.println(F("Button identify mode OFF"));
+            if (dispOk) {
+                display.initScreen();
+            }
+            ctx.lastActivityTime = millis();
+        } else if (c == 'u' || c == 'U') {
+            Serial.println(F("Reflash: syncing storage, entering bootloader..."));
+            if (flashOk && configMgr.hasPendingToSync()) {
+                configMgr.syncPendingToFlash();
+            }
+            Serial.flush();
+            delay(100);
+            enterUf2Dfu();
+            // Does not return
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // ── Main Loop ─────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 void loop() {
@@ -479,6 +572,13 @@ void loop() {
     pollPowerButton(now);
 
     buttons.update();
+
+    // ── Button identify mode: report raw pins, do nothing else ──
+    if (buttonIdentifyActive) {
+        pollButtonIdentify();
+        delay(Timing::LOOP_INTERVAL_MS);
+        return;
+    }
 
     // ── Snake mode: SnakeGame owns the loop ──
     if (snakeGame.isActive()) {
@@ -815,6 +915,14 @@ static void readSensorsUpdate(uint32_t now) {
             Serial.print(F(", stability buf="));
             Serial.print(ctx.config.stabilityBufferLength);
             Serial.println(saved ? F(" (saved)") : F(" (NOT saved — storage error)"));
+        } else if (c == 'b' || c == 'B') {
+            buttonIdentifyActive = true;
+            Serial.println(F("Button identify mode ON — press each button; "
+                             "'b' again to exit"));
+            if (dispOk) {
+                display.updateDistanceText("BTN?");
+                display.refresh();
+            }
         } else if (c == 'c' || c == 'C') {
             Serial.println(F("--- /config.json ---"));
             if (!configMgr.printConfig(Serial)) {

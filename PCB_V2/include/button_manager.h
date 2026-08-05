@@ -8,11 +8,13 @@ constexpr uint8_t NUM_BUTTONS = 4;
 // Button indices — PCB V2 has 4 GPIO buttons (H3 header) plus a dedicated
 // hardware power toggle into the LTC2954 (handled by the power driver, not
 // here). Roles per the V2 UI scheme:
+// Physical pins live in config.h (PIN_BTN_*) — they were re-assigned
+// 2026-08-05 after a button rework, so don't assume role N sits on BUTTONn.
 enum class Button : uint8_t {
-    FIRE = 0,     // Button 1 (P0.27) — take measurement / select
-    UP_DISCO = 1, // Button 2 (P1.03) — menu up / disco toggle / hold for snake
-    DOWN = 2,     // Button 3 (P1.05) — menu down
-    MENU = 3,     // Button 4 (P1.07) — menu open / select
+    FIRE = 0,     // P1.07 — take measurement / select
+    UP_DISCO = 1, // P1.03 — menu up / disco toggle / hold for snake
+    DOWN = 2,     // P0.27 — menu down
+    MENU = 3,     // P1.05 — menu open / select
 };
 
 class ButtonManager {

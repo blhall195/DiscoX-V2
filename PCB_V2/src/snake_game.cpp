@@ -127,17 +127,19 @@ bool SnakeGame::update() {
     }
 
     // ── Button handling (during play) ───────────────────────────────
-    if (buttons_->wasPressed(Button::FIRE)) { // Button 1 — turn left
+    // Steering is UP/DOWN (the adjacent pair) — FIRE used to turn left, but
+    // it sits away from UP on the reworked button layout.
+    if (buttons_->wasPressed(Button::DOWN)) { // turn left
         int8_t tmp = dirX_;
         dirX_ = dirY_;
         dirY_ = -tmp;
     }
-    if (buttons_->wasPressed(Button::UP_DISCO)) { // Button 2 — turn right
+    if (buttons_->wasPressed(Button::UP_DISCO)) { // turn right
         int8_t tmp = dirX_;
         dirX_ = -dirY_;
         dirY_ = tmp;
     }
-    if (buttons_->wasPressed(Button::MENU) || buttons_->wasPressed(Button::DOWN)) { // exit
+    if (buttons_->wasPressed(Button::MENU)) { // exit (DOWN now steers)
         Serial.println(F("Exiting Snake Game..."));
         disco_->turnOff();
         active_ = false;

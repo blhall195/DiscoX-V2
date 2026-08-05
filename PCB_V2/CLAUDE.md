@@ -55,7 +55,7 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 | Normal | take shot / wake laser | hold: disco toggle; short: splay shot | — | enter settings menu |
 | Menu | select | up | down | select |
 | Calibration | record point / F-B shot | finish F/B early; hold combos: save (FIRE+UP) / discard (UP) | undo last point / cancel capture (screen hint "B3:undo") | undo (alias of DOWN); any-button advance on intro screens |
-| Snake | turn left | turn right | exit | exit |
+| Snake | — | turn right | turn left | exit |
 
 Power on/off = the dedicated hardware button into the LTC2954 (H3 pin 4,
 PWR_TOG). Holding it long enough hard-kills via the LTC2954 itself even if

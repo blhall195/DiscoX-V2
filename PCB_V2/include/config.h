@@ -16,10 +16,13 @@
 
 // ── Button pins (all active LOW with internal pull-ups) ─────────────
 // V2 has 4 GPIO buttons + a dedicated hardware power toggle (LTC2954).
-constexpr uint8_t PIN_BTN_FIRE = PIN_BUTTON1;     // B1 — take measurement
-constexpr uint8_t PIN_BTN_UP_DISCO = PIN_BUTTON2; // B2 — menu up / disco toggle
-constexpr uint8_t PIN_BTN_DOWN = PIN_BUTTON3;     // B3 — menu down
-constexpr uint8_t PIN_BTN_MENU = PIN_BUTTON4;     // B4 — menu open / select
+// Remapped 2026-08-05 after a button rework — the physical switch behind each
+// role changed. Verified on hardware with the serial 'b' identify mode (see
+// pollButtonIdentify in main.cpp), which reports the raw pin behind a press.
+constexpr uint8_t PIN_BTN_FIRE = PIN_BUTTON4;     // P1.07 — take measurement
+constexpr uint8_t PIN_BTN_UP_DISCO = PIN_BUTTON2; // P1.03 — menu up / disco toggle
+constexpr uint8_t PIN_BTN_DOWN = PIN_BUTTON1;     // P0.27 — menu down
+constexpr uint8_t PIN_BTN_MENU = PIN_BUTTON3;     // P1.05 — menu open / select
 
 // ── Power control (LTC2954 pushbutton controller) ───────────────────
 // PIN_KILL / PIN_PB_INT / PIN_PGOOD come from pins_v2.h.
