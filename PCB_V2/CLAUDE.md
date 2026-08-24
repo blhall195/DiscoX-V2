@@ -32,6 +32,44 @@ pio device monitor -b 115200
   `test/support/arduino_stubs.cpp` (PlatformIO only compiles sources inside
   the suite's own folder — without the shim every suite fails to link).
 
+### First flash of a blank/new nRF52840 module (SWD bootloader burn)
+
+A brand-new module has no bootloader, so it never enumerates over USB —
+`pio run -t upload` (USB DFU) has nothing to talk to. The user's probe for
+this is a **Raspberry Pi Pico running debugprobe firmware** (a CMSIS-DAP
+SWD probe); they call it "the J-Link" but it isn't a SEGGER unit — it
+enumerates as `VID_2E8A&PID_000C`, "Debugprobe on Pico (CMSIS-DAP)", not
+`VID_1366`. Flashing tool is `pyocd` (installed at
+`C:\Users\Brendans-PC\AppData\Local\Programs\Python\Python314\Scripts\pyocd.exe`,
+not on PATH — call by full path or `where pyocd`).
+
+1. Confirm the probe is connected and can see the target chip:
+   ```
+   pyocd list
+   pyocd reset -t nrf52840 -v      # should print DP IDR / AHB-AP / "This appears to be an nRF52840..."
+   ```
+2. Burn the bootloader + SoftDevice (bundled combo hex, ships inside the
+   PlatformIO framework package — matches `board = nrf52840_dk_adafruit`
+   i.e. the `pca10056` variant):
+   ```
+   pyocd flash -t nrf52840 "C:\Users\Brendans-PC\.platformio\packages\framework-arduinoadafruitnrf52\bootloader\pca10056\pca10056_bootloader-0.6.2_s140_6.1.1.hex"
+   pyocd reset -t nrf52840
+   ```
+3. SWD's job is now done — the SWD lines alone do **not** put the module on
+   the USB bus. Plug the module's **own USB port** into the PC (separately
+   from/instead of the probe). With no application present it boots
+   straight into the bootloader and enumerates as VID 239A.
+4. From here it's the normal path: `pio run -t upload` (USB DFU) flashes
+   the actual `PCB_V2` application. Don't flash the app over SWD — USB DFU
+   is the documented, tested path for every update after the initial
+   bootloader burn.
+
+This only applies to a blank chip. Re-flashing a board that already has the
+bootloader (the normal case) should always go through USB DFU per the `u`
+serial command / clean-bootloader-entry procedure — SWD skips that
+storage-safe shutdown and risks corrupting LittleFS on a board with real
+data on it.
+
 ## Architecture (what changed from V1)
 
 Cooperative 10 ms super-loop in `src/main.cpp`, same poller structure as the
