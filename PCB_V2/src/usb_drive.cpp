@@ -277,6 +277,13 @@ static int readFatFile(const char *fatName, char *buf, size_t bufSize) {
 }
 
 bool importFiles(ConfigManager &cfgMgr) {
+    // The volume has been mounted since export, but the HOST has rewritten
+    // the medium behind FatFs's back — its cached FAT/directory sectors are
+    // stale, so reads of host-modified files see wrong sizes or fail with
+    // FR_INT_ERR ("CONFIG.JSON unreadable"). Force a clean remount so every
+    // sector is re-read from flash.
+    f_mount(nullptr, "", 0);
+    s_fatMounted = false;
     if (!mountOrFormat()) {
         return false;
     }

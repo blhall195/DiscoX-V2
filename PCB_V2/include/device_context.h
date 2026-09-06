@@ -39,6 +39,9 @@ struct Config {
     uint32_t autoShutdownTimeout = Defaults::autoShutdownTimeout;
     uint32_t laserTimeout = Defaults::laserTimeout;
     bool laserWibble = Defaults::laserWibble;
+    uint8_t laserShots = Defaults::laserShots;
+    uint16_t laserSqLimit = Defaults::laserSqLimit;
+    uint16_t laserSpreadLimitMm = Defaults::laserSpreadLimitMm;
     bool measureFromFront = Defaults::measureFromFront;
     bool splaysEnabled = Defaults::splaysEnabled;
     uint8_t screenBrightness = Defaults::screenBrightness;

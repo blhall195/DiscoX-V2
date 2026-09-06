@@ -19,6 +19,13 @@ pio run -t upload          # env pcb_v2 is the default — USB DFU, port auto-de
 pio device monitor -b 115200
 ```
 
+- `pio run` also emits **`.pio/build/pcb_v2/firmware.uf2`** (post-build step
+  `tools/make_uf2.py`) — the image to hand end users for a double-tap-reset
+  drag-and-drop update. It covers only the application region
+  (0x26000-0x8C200 as of 2026-09), so the FAT settings partition and the
+  LittleFS store holding `config.json` survive the update untouched;
+  new settings added by the update are then migrated in on first boot (see
+  "Settings migration" below). Development flashing still uses USB DFU.
 - Board enumerates as **VID 239A** (Adafruit bootloader); COM number drifts
   between flashes — auto-detect, never hard-code.
 - Upload fails with PermissionError if anything holds the COM port (close
@@ -144,6 +151,35 @@ single 4 KB page cache is shared, which is why host access is gated
 on the USB task and must never interleave with loop-task filesystem writes.
 
 ## Gotchas (inherited + new)
+
+- **LDJ-100 signal quality is inverted from its own manual.** The manual says
+  "the smaller the SQ value, the stronger the laser signal"; bench testing
+  (2026-09-06) shows the **opposite** — a white surface up close reads a few
+  hundred, a black/specular surface reads 4-6. SQ behaves like a return
+  amplitude. The rejection gate in `LaserManager::measureValidated()`
+  therefore rejects shots with SQ **below** `laser_sq_limit`. Do not
+  "correct" that comparison to match the PDF — it would disable rejection of
+  exactly the dark/specular targets it exists to catch. Note SQ also falls
+  with distance, so a limit tuned up close will reject legitimate long shots;
+  verify at survey range. Every shot logs `LZRSQ shot= mm= sq= st=` to serial
+  for threshold calibration. Background: `discox-sq-rejection-brief.md`
+  (note that brief repeats the manual's inverted claim).
+
+- **Settings migration on firmware update.** `loadConfig()` compares the
+  stored `/config.json` against `kExpectedKeys` (config_manager.cpp); if the
+  firmware has gained settings since the file was written, boot logs
+  `Firmware update added settings — migrating config` and re-saves, so new
+  keys appear on the USB drive with their defaults and existing values are
+  preserved. **`kExpectedKeys` must stay exactly in sync with the `doc[...]`
+  keys in `saveConfig()`** — a key listed but never written makes every boot
+  re-save the file (needless flash wear); a key written but not listed simply
+  won't trigger migration.
+
+- **FatFs caches sectors across the host's writes.** `importFiles()` force-
+  remounts the FAT volume (`f_mount(nullptr,...)` then `mountOrFormat()`)
+  before reading. Without this the host's edits are invisible behind stale
+  cached FAT/directory sectors and imports fail with "CONFIG.JSON
+  unreadable/too large" or silently import old content (fixed 2026-09-06).
 
 - **`PIN_BUTTON1..4` collide with the pca10056 variant** (the DK's on-board
   buttons at pins 11/12/24/25). `config.h` therefore includes `<Arduino.h>`

@@ -14,6 +14,7 @@ enum class LaserError : uint8_t {
     TOO_DIM,        // laser spot too dim / signal too weak
     TOO_BRIGHT,     // too much ambient light or too close
     BAD_READING,    // unable to measure (e.g. target out of range)
+    INCONSISTENT,   // repeated shots disagree — untrustworthy target
 };
 
 // ── Laser manager — V2 adapter ───────────────────────────────────────
@@ -37,8 +38,20 @@ class LaserManager {
 
     void wibble();
 
-    // Single measurement. Distance returned in mm via out param.
-    LaserError measure(int32_t &distanceMm);
+    // Single low-speed shot. Distance in mm via out param; signal quality
+    // (SQ, higher = stronger) via sq when non-null.
+    LaserError measure(int32_t &distanceMm, uint16_t *sq = nullptr);
+
+    // Survey-grade measurement: `shots` low-speed shots (clamped to
+    // Defaults::laserShotsMax), each frame-validated by the driver and
+    // SQ-gated (rejected below sqLimit; 0 = gate off). shots 1-2 must all survive; shots
+    // 3+ need 3 survivors agreeing within spreadLimitMm; the median of the
+    // survivors is returned. Dark/specular targets fail loudly (TOO_DIM /
+    // INCONSISTENT) instead of returning a plausible-but-wrong distance.
+    // Every shot is logged to Serial as "LZRSQ mm= sq= st=" for threshold
+    // calibration. See discox-sq-rejection-brief.md.
+    LaserError measureValidated(int32_t &distanceMm, uint8_t shots, uint16_t sqLimit,
+                                uint16_t spreadLimitMm);
 
     LaserError lastError() const { return _lastError; }
 

@@ -48,6 +48,11 @@ class ConfigManager {
     // Used by the USB-drive import — caller must have validated the JSON.
     bool saveConfigJsonRaw(const char *json, size_t len);
 
+    // True if the last successful loadConfig() found expected keys missing
+    // from the stored file — i.e. this firmware added settings since the
+    // file was written. Caller should saveConfig() to migrate the file.
+    bool loadedConfigIncomplete() const { return loadMissing_; }
+
     // Print the stored /config.json verbatim to a stream (debug/commissioning).
     bool printConfig(Stream &out);
 
@@ -133,6 +138,7 @@ class ConfigManager {
 
   private:
     bool mounted_ = false;
+    bool loadMissing_ = false;
     bool reformatted_ = false; // set if LittleFS was formatted this boot
 
     // RAM buffer for pending readings (avoids flash writes mid-measurement)

@@ -146,7 +146,7 @@ bool ConfigManager::loadConfig(Config &cfg) {
     // static: the loop task has only a 4 KB stack and the LittleFS call
     // chain runs below these frames — keep kilobyte buffers in .bss
     // (see the stack note in CalibrationMode::saveCalibration)
-    static char buf[1024];
+    static char buf[2048]; // matches the USB-import parse buffer
     int len = file.read(buf, sizeof(buf) - 1);
     file.close();
     if (len <= 0) {
@@ -160,6 +160,26 @@ bool ConfigManager::loadConfig(Config &cfg) {
         Serial.print(F("Config parse error: "));
         Serial.println(err.c_str());
         return false;
+    }
+
+    // Keep this list in sync with the doc[...] keys in saveConfig() below.
+    // A stored file written by older firmware lacks newly added keys; flag
+    // it so boot can re-save and surface the new settings on the USB drive.
+    static const char *const kExpectedKeys[] = {
+        "mag_tolerance", "grav_tolerance", "dip_tolerance", "anomaly_detection",
+        "stability_tolerance", "stability_buffer_length", "ema_alpha_stable",
+        "ema_alpha_moving", "leg_angle_tolerance", "cartesian_tolerance",
+        "laser_distance_offset", "cal_mag_consistency", "cal_grav_consistency",
+        "cal_buffer_length", "cal_settle_ms", "cal_ema_alpha", "cal_timeout_ms",
+        "auto_shutdown_timeout", "laser_timeout", "laser_wibble", "laser_shots",
+        "laser_sq_limit", "laser_spread_limit_mm", "measure_from_front",
+        "screen_brightness", "splays_enabled", "ble_name"};
+    loadMissing_ = false;
+    for (const char *key : kExpectedKeys) {
+        if (doc[key].isNull()) {
+            loadMissing_ = true;
+            break;
+        }
     }
 
     cfg.magTolerance = doc["mag_tolerance"] | Defaults::magTolerance;
@@ -182,6 +202,14 @@ bool ConfigManager::loadConfig(Config &cfg) {
     cfg.autoShutdownTimeout = doc["auto_shutdown_timeout"] | Defaults::autoShutdownTimeout;
     cfg.laserTimeout = doc["laser_timeout"] | Defaults::laserTimeout;
     cfg.laserWibble = doc["laser_wibble"] | Defaults::laserWibble;
+    cfg.laserShots = doc["laser_shots"] | (int)Defaults::laserShots;
+    if (cfg.laserShots < 1) {
+        cfg.laserShots = 1;
+    } else if (cfg.laserShots > Defaults::laserShotsMax) {
+        cfg.laserShots = Defaults::laserShotsMax;
+    }
+    cfg.laserSqLimit = doc["laser_sq_limit"] | (int)Defaults::laserSqLimit;
+    cfg.laserSpreadLimitMm = doc["laser_spread_limit_mm"] | (int)Defaults::laserSpreadLimitMm;
     cfg.measureFromFront = doc["measure_from_front"] | Defaults::measureFromFront;
     cfg.screenBrightness = doc["screen_brightness"] | (int)Defaults::screenBrightness;
     cfg.splaysEnabled = doc["splays_enabled"] | Defaults::splaysEnabled;
@@ -223,6 +251,9 @@ bool ConfigManager::saveConfig(const Config &cfg) {
     doc["auto_shutdown_timeout"] = cfg.autoShutdownTimeout;
     doc["laser_timeout"] = cfg.laserTimeout;
     doc["laser_wibble"] = cfg.laserWibble;
+    doc["laser_shots"] = (int)cfg.laserShots;
+    doc["laser_sq_limit"] = (int)cfg.laserSqLimit;
+    doc["laser_spread_limit_mm"] = (int)cfg.laserSpreadLimitMm;
     doc["measure_from_front"] = cfg.measureFromFront;
     doc["screen_brightness"] = (int)cfg.screenBrightness;
     doc["splays_enabled"] = cfg.splaysEnabled;
@@ -231,7 +262,7 @@ bool ConfigManager::saveConfig(const Config &cfg) {
     doc["ble_name"] = nameToSave;
 
     // Serialize to a RAM buffer first, then write atomically.
-    static char buf[1280]; // static — 4 KB loop-task stack, see loadConfig note
+    static char buf[2048]; // static — 4 KB loop-task stack, see loadConfig note
     if (measureJsonPretty(doc) >= sizeof(buf)) {
         Serial.println(F("Config JSON too large for buffer"));
         return false;

@@ -1270,10 +1270,12 @@ static void pollMeasurement(uint32_t now) {
     }
     delay(30); // let the UART line settle
 
-    // Take laser distance
+    // Take laser distance — multi-shot validated (rejects dark/specular
+    // targets rather than passing a plausible-but-wrong distance downstream)
     Serial.println(F("MEAS: sending measure cmd..."));
     int32_t distMm = 0;
-    LaserError lErr = laser.measure(distMm);
+    LaserError lErr = laser.measureValidated(distMm, ctx.config.laserShots,
+                                             ctx.config.laserSqLimit, ctx.config.laserSpreadLimitMm);
     Serial.print(F("MEAS: result="));
     Serial.print(LaserManager::errorString(lErr));
     Serial.print(F(" mm="));
@@ -1282,8 +1284,29 @@ static void pollMeasurement(uint32_t now) {
     if (lErr != LaserError::OK) {
         Serial.print(F("MEAS: laser error: "));
         Serial.println(LaserManager::errorString(lErr));
-        resetLaser();
-        alertError("LzrERR");
+        // The remedies differ, so the display code must too: DIM = weak
+        // return (white target card / better angle), RNG = out of range,
+        // VAR = shots disagree (specular multi-path), BRT = too much light.
+        const char *code = "LzrERR";
+        switch (lErr) {
+        case LaserError::TOO_DIM:
+            code = "LzrDIM";
+            break;
+        case LaserError::TOO_BRIGHT:
+            code = "LzrBRT";
+            break;
+        case LaserError::BAD_READING:
+            code = "LzrRNG";
+            break;
+        case LaserError::INCONSISTENT:
+            code = "LzrVAR";
+            break;
+        default:
+            // Comm-level failure — reset the module before the next shot.
+            resetLaser();
+            break;
+        }
+        alertError(code);
         ctx.quickShot = false;
         ctx.currentState = SystemState::IDLE;
         return;
@@ -2102,6 +2125,10 @@ static void initFlash() {
     if (flashOk) {
         if (configMgr.loadConfig(ctx.config)) {
             Serial.println(F("  Config loaded from flash"));
+            if (configMgr.loadedConfigIncomplete()) {
+                Serial.println(F("  Firmware update added settings — migrating config"));
+                configMgr.saveConfig(ctx.config);
+            }
         } else {
             Serial.println(F("  No saved config — writing defaults"));
             configMgr.saveConfig(ctx.config);

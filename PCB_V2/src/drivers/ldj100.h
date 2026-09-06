@@ -28,7 +28,10 @@ class LDJ100 {
 
     struct Measurement {
         uint32_t distanceMm = 0;
-        uint16_t signalQuality = 0; // lower = stronger laser signal
+        // Manual claims smaller = stronger, but bench testing (2026-09-06)
+        // shows the opposite: HIGHER = stronger return (white card up close
+        // reads a few hundred, black/specular reads single digits).
+        uint16_t signalQuality = 0;
     };
 
     void begin(Stream &serial, uint8_t address = 0x00);

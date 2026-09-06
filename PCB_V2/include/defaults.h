@@ -29,6 +29,18 @@ constexpr uint16_t calTimeoutMs = 4000;         // ms max wait for stability bef
 constexpr uint32_t autoShutdownTimeout = 1800;  // seconds (30 min)
 constexpr uint32_t laserTimeout = 120;          // seconds (2 min)
 constexpr bool laserWibble = true;              // blink laser on leg detect
+// Laser shot validation (dark/specular targets return plausible-but-wrong
+// distances — see discox-sq-rejection-brief.md). A measurement is N low-speed
+// shots; a shot survives if its frame validates and its signal quality (SQ,
+// HIGHER = stronger — the manual claims the inverse but bench testing
+// 2026-09-06 disproved it) is at least laserSqLimit. Median of survivors is
+// returned only if enough survive and they agree within laserSpreadLimitMm.
+constexpr uint8_t laserShotsMax = 5;  // buffer size / settings clamp
+constexpr uint8_t laserShots = 1;     // default: single shot, SQ-gated — fast
+constexpr uint16_t laserSqLimit = 0;      // reject shots with SQ BELOW this; 0 = gate disabled
+constexpr uint16_t laserSpreadLimitMm = 25;
+constexpr uint32_t laserMinDistanceMm = 30;     // module rated minimum
+constexpr uint32_t laserMaxDistanceMm = 100000; // rated max at reflectivity 1.0
 constexpr bool measureFromFront = false;        // false = Back (add offset), true = Front (raw laser)
 constexpr bool splaysEnabled = false;           // enable splay shots on button 2 short press
 constexpr uint8_t screenBrightness = 255;       // OLED contrast 0-255
