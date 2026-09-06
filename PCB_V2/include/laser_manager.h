@@ -13,8 +13,16 @@ enum class LaserError : uint8_t {
     COMMAND_FAILED, // Bad frame, module error, or unexpected response
     TOO_DIM,        // laser spot too dim / signal too weak
     TOO_BRIGHT,     // too much ambient light or too close
-    BAD_READING,    // unable to measure (e.g. target out of range)
+    BAD_READING,    // module reports the target out of its range
     INCONSISTENT,   // repeated shots disagree — untrustworthy target
+    // The module returned, but the return was unusable — dark, shiny or
+    // steeply angled surfaces do this at any distance. Kept apart from
+    // BAD_READING because the remedy is the target, not the range: they
+    // shared a bucket until 2026-09-06 and reported "out of range" for a
+    // surface problem two feet away.
+    UNSTABLE,
+    TOO_NEAR, // measured distance below the module's rated minimum
+    TOO_FAR,  // measured distance above the module's rated maximum
 };
 
 // ── Laser manager — V2 adapter ───────────────────────────────────────
@@ -55,6 +63,12 @@ class LaserManager {
 
     LaserError lastError() const { return _lastError; }
 
+    // Raw LDJ100 status behind the last failure (0 = none, e.g. the failure
+    // was a host-side timeout or the SQ gate). LaserError collapses several
+    // module codes into one bucket, so keep this for the serial log —
+    // LDJ100::statusText() turns it into the module's own wording.
+    uint16_t lastStatusRaw() const { return _lastStatus; }
+
     static const char *errorString(LaserError err);
 
   private:
@@ -63,4 +77,5 @@ class LaserManager {
 
     LDJ100 _ldj;
     LaserError _lastError = LaserError::OK;
+    uint16_t _lastStatus = 0;
 };

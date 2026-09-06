@@ -109,8 +109,6 @@ void MenuManager::buildMenu() {
 
     snprintf(_cartesianLabel, sizeof(_cartesianLabel), "Leg tol: %dcm", (int)_ctx->config.cartesianTolerance);
 
-    updateSplaysLabel();
-
     snprintf(_measureFromLabel, sizeof(_measureFromLabel), "Measure from: %s",
              _ctx->config.measureFromFront ? "Front" : "Back");
 
@@ -203,7 +201,6 @@ void MenuManager::buildMenu() {
     _settingsSub.addSubmenu(_shutdownLabel, &_shutdownSub);
     _settingsSub.addSubmenu(_brightnessLabel, &_brightnessSub);
     _settingsSub.addSubmenu(_cartesianLabel, &_cartesianSub);
-    _settingsSub.addAction(_splaysLabel, toggleSplays);
     _settingsSub.addAction("USB Drive Mode", enterUsbDrive);
     // (V2: no "Edit Settings File" — there is no USB drive on internal flash)
     _settingsSub.addSubmenu("Reformat Storage", &_reformatSub);
@@ -591,21 +588,6 @@ void MenuManager::setCartesianTolerance(int value) {
     Serial.print(value);
     Serial.println(F(" cm"));
     s_instance->buildMenu();
-}
-
-void MenuManager::updateSplaysLabel() {
-    snprintf(_splaysLabel, sizeof(_splaysLabel), "Splays: %s", _ctx->config.splaysEnabled ? "On" : "Off");
-}
-
-void MenuManager::toggleSplays(int) {
-    if (!s_instance) {
-        return;
-    }
-    s_instance->_ctx->config.splaysEnabled = !s_instance->_ctx->config.splaysEnabled;
-    s_instance->_cfgMgr->saveConfig(s_instance->_ctx->config);
-    Serial.print(F("Menu: splays "));
-    Serial.println(s_instance->_ctx->config.splaysEnabled ? F("ON") : F("OFF"));
-    s_instance->updateSplaysLabel();
 }
 
 void MenuManager::exitMenu(int) {

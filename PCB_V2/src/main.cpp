@@ -161,6 +161,19 @@ static bool discoTriggered = false; // true once disco toggled during this hold
 
 // ── Toast notifications ─────────────────────────────────────────────
 static uint32_t splaysToastTime = 0;
+static uint32_t errorToastTime = 0;
+// How long the full-screen error holds the panel after the disco flashes
+// stop. Long enough to read a headline and two lines without being long
+// enough to get in the way of re-sighting; any button cuts it short.
+static constexpr uint32_t ERROR_TOAST_MS = 1500;
+
+// Drop a held error screen early. Safe to call when none is showing.
+static void dismissErrorScreen() {
+    if (errorToastTime != 0) {
+        errorToastTime = 0;
+        display.clearErrorScreen();
+    }
+}
 
 // ── BLE state ───────────────────────────────────────────────────────
 static bool lastBleConnected = false;
@@ -198,7 +211,7 @@ static void updateDisplay(uint32_t now);
 static void handleBuzzerTestLine(char *line);
 static void showSplaysDisabledToast();
 static void handleMeasurementSuccess();
-static void alertError(const char *errCode);
+static void alertError(const char *errCode, const char *detail = nullptr);
 static void resetLaser();
 static void doShutdown();
 static void enterUsbDriveMode(); // modal USB MSC settings drive — reboots on exit
@@ -1131,6 +1144,10 @@ static bool heldLongEnoughForDisco(uint32_t now, uint32_t start) {
 }
 
 static void prepareForShot() {
+    // Re-sighting is the answer to every laser error, so don't make the user
+    // wait out the hold once they've started doing it.
+    dismissErrorScreen();
+
     // Setup laser
     laserOn();
     lastDistance = 0;
@@ -1142,6 +1159,7 @@ static void prepareForShot() {
 
 // Call after prepare for shot
 static void startShot(bool isQuickShot) {
+    dismissErrorScreen();
     ctx.quickShot = isQuickShot;
     ctx.displayFrozen = false;
     ctx.currentState = SystemState::TAKING_MEASUREMENT;
@@ -1283,30 +1301,65 @@ static void pollMeasurement(uint32_t now) {
 
     if (lErr != LaserError::OK) {
         Serial.print(F("MEAS: laser error: "));
-        Serial.println(LaserManager::errorString(lErr));
-        // The remedies differ, so the display code must too: DIM = weak
-        // return (white target card / better angle), RNG = out of range,
-        // VAR = shots disagree (specular multi-path), BRT = too much light.
-        const char *code = "LzrERR";
+        Serial.print(LaserManager::errorString(lErr));
+        // The module's own code, when it gave one — LaserError buckets several
+        // together, so this is what separates e.g. "out of range" from
+        // "invalid result" once both show as RANGE on the display.
+        uint16_t raw = laser.lastStatusRaw();
+        if (raw != 0) {
+            Serial.print(F(" [module 0x"));
+            Serial.print(raw, HEX);
+            Serial.print(F(": "));
+            Serial.print(LDJ100::statusText(raw));
+            Serial.print(F("]"));
+        }
+        Serial.println();
+        // Each failure has a different fix, so each gets its own headline
+        // (<=7 chars, size 3) and remedy (2 lines of <=10, size 2) filling
+        // the panel the stale readings used to share. Underground with cold
+        // hands this has to be readable at a glance — the old LzrDIM/LzrBRT/
+        // LzrRNG/LzrVAR codes needed the manual.
+        const char *code = "LASER";
+        const char *detail = "Bad reply\nResetting";
         switch (lErr) {
         case LaserError::TOO_DIM:
-            code = "LzrDIM";
+            code = "WEAK";
+            detail = "Dim target\nUse card";
             break;
         case LaserError::TOO_BRIGHT:
-            code = "LzrBRT";
+            code = "GLARE";
+            detail = "Too bright\nShade it";
+            break;
+        case LaserError::UNSTABLE:
+            code = "SURFACE";
+            detail = "Dark/shiny\nUse card";
             break;
         case LaserError::BAD_READING:
-            code = "LzrRNG";
+            code = "RANGE";
+            detail = "No target\nin range";
+            break;
+        case LaserError::TOO_NEAR:
+            code = "NEAR";
+            detail = "Too close\nMin 0.03m";
+            break;
+        case LaserError::TOO_FAR:
+            code = "FAR";
+            detail = "Too far\nMax 100m";
             break;
         case LaserError::INCONSISTENT:
-            code = "LzrVAR";
+            code = "SPREAD";
+            detail = "Shots vary\nRe-sight";
+            break;
+        case LaserError::TIMEOUT:
+            detail = "No reply\nResetting";
+            resetLaser();
             break;
         default:
             // Comm-level failure — reset the module before the next shot.
             resetLaser();
             break;
         }
-        alertError(code);
+        alertError(code, detail);
         ctx.quickShot = false;
         ctx.currentState = SystemState::IDLE;
         return;
@@ -1475,9 +1528,17 @@ static void handleMeasurementSuccess() {
 }
 
 // ── Error alert — red flash sequence ────────────────────────────
-static void alertError(const char *errCode) {
+static void alertError(const char *errCode, const char *detail) {
+    // A detail line means there is enough to say to justify the whole panel
+    // (the laser errors); without one — the MagErr/GravErr/DipErr anomalies —
+    // keep the inline presentation, because that path deliberately shows the
+    // readings the anomaly refers to straight afterwards.
     if (dispOk) {
-        display.updateDistanceText(errCode);
+        if (detail) {
+            display.showErrorScreen(errCode, detail);
+        } else {
+            display.updateDistanceText(errCode);
+        }
         display.refresh();
     }
 
@@ -1492,6 +1553,13 @@ static void alertError(const char *errCode) {
 
     // Beep after error flashes
     Sounds::error();
+
+    // Start the readable hold only now: the flashes above are a blocking
+    // ~800 ms during which the screen is already up but the disco is
+    // strobing, which is no time to be reading two lines of text.
+    if (dispOk && detail) {
+        errorToastTime = millis();
+    }
 
     // Re-enable laser
     laser.setLaser(true);
@@ -1740,6 +1808,24 @@ static void updateDisplay(uint32_t now) {
         } else {
             splaysToastTime = 0;
         }
+    }
+
+    // Full-screen error holds the panel. Same millis()-not-now reasoning as
+    // the splay toast above: alertError blocks through the disco flashes, so
+    // `now` predates errorToastTime and would underflow.
+    if (errorToastTime != 0) {
+        if (millis() - errorToastTime < ERROR_TOAST_MS) {
+            if (now - lastDisplayRefresh >= Timing::DISPLAY_REFRESH_MS) {
+                lastDisplayRefresh = now;
+                // Keep the status strip live; refresh() draws the error screen.
+                display.updateBattery(lastBatPct);
+                display.updateBTLabel(bleOk ? ble.isConnected() : false);
+                display.refresh();
+            }
+            return;
+        }
+        errorToastTime = 0;
+        display.clearErrorScreen();
     }
 
     if (now - lastDisplayRefresh < Timing::DISPLAY_REFRESH_MS) {

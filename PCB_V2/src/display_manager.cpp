@@ -23,6 +23,88 @@ static constexpr int16_t DIST_Y = 34;
 static constexpr int16_t AZ_Y = 68;
 static constexpr int16_t INC_Y = 100;
 
+// Error detail line — text size 1, in the 10 px gap between the distance row
+// (34..57 at size 3) and the azimuth row. Only drawn while the distance field
+// shows an error headline, so it never displaces a reading. At size 1 the 6 px
+// cell gives 21 columns across the 128 px panel.
+static constexpr int16_t DETAIL_Y = 59;
+static constexpr uint8_t DETAIL_MAX_CHARS = 21;
+
+// ── Full-screen error layout ────────────────────────────────────────
+// An error owns the whole panel: the azimuth/inclination behind it are the
+// frozen pre-shot values and mean nothing once the shot failed, so that
+// space buys a headline you can read at arm's length plus a two-line remedy
+// at size 2 instead of the old 21-char size-1 sliver.
+// Columns: 128 px / 18 px cell = 7 at size 3, / 12 px = 10 at size 2.
+static constexpr int16_t ERR_HEAD_Y = 22;
+static constexpr uint8_t ERR_HEAD_MAX_CHARS = 7;
+static constexpr int16_t ERR_RULE_Y = 56;
+static constexpr int16_t ERR_RULE_INSET = 14;
+static constexpr int16_t ERR_BODY_TOP = 64; // body occupies 64..128
+static constexpr int16_t ERR_BODY_LINE_H = 18;
+static constexpr uint8_t ERR_BODY_COLS = 10;
+static constexpr uint8_t ERR_BODY_LINES = 3;
+
+// Greedy word-wrap into at most maxLines of ERR_BODY_COLS, breaking on '\n'
+// as well as spaces so the messages can pick their own line breaks. A word
+// longer than a line is truncated rather than allowed to run off the panel.
+// Returns lines used. Small fixed buffers only — the loop task has a 4 KB
+// stack (see CLAUDE.md).
+static uint8_t wrapWords(const char *text, char out[][ERR_BODY_COLS + 1], uint8_t maxLines) {
+    for (uint8_t i = 0; i < maxLines; i++) {
+        out[i][0] = '\0';
+    }
+    if (!text || maxLines == 0) {
+        return 0;
+    }
+
+    uint8_t line = 0;
+    uint8_t col = 0;
+    while (*text) {
+        // Skip run of separators, honouring an explicit break.
+        bool forced = false;
+        while (*text == ' ' || *text == '\n') {
+            if (*text == '\n') {
+                forced = true;
+            }
+            text++;
+        }
+        if (!*text) {
+            break;
+        }
+        if (forced && col != 0) {
+            if (line + 1 >= maxLines) {
+                break;
+            }
+            line++;
+            col = 0;
+        }
+
+        size_t wordLen = 0;
+        while (text[wordLen] && text[wordLen] != ' ' && text[wordLen] != '\n') {
+            wordLen++;
+        }
+        size_t take = (wordLen > ERR_BODY_COLS) ? ERR_BODY_COLS : wordLen;
+
+        if (col != 0 && col + 1 + take > ERR_BODY_COLS) {
+            if (line + 1 >= maxLines) {
+                break;
+            }
+            line++;
+            col = 0;
+        }
+        if (col != 0) {
+            out[line][col++] = ' ';
+        }
+        for (size_t i = 0; i < take; i++) {
+            out[line][col++] = text[i];
+        }
+        out[line][col] = '\0';
+        text += wordLen;
+    }
+    return (out[0][0] != '\0') ? (uint8_t)(line + 1) : 0;
+}
+
 // Degree symbol drawn as a small circle (looks better than CP437 '\xF8' at size
 // 3)
 static constexpr int16_t DEG_RADIUS = 3;
@@ -69,10 +151,18 @@ void DisplayManager::updateDistance(float distance) {
     _distIsText = false;
 }
 
-void DisplayManager::updateDistanceText(const char *text) {
+void DisplayManager::updateDistanceText(const char *text, const char *detail) {
     strncpy(_distText, text, sizeof(_distText) - 1);
     _distText[sizeof(_distText) - 1] = '\0';
     _distIsText = true;
+    // No detail clears the previous one — a stale remedy line under an
+    // unrelated headline is worse than no line at all.
+    if (detail) {
+        strncpy(_distDetail, detail, sizeof(_distDetail) - 1);
+        _distDetail[sizeof(_distDetail) - 1] = '\0';
+    } else {
+        _distDetail[0] = '\0';
+    }
 }
 
 void DisplayManager::updateAzimuth(float azimuth) { _azimuth = azimuth; }
@@ -251,8 +341,23 @@ void DisplayManager::refresh() {
     if (!_initialized) {
         return;
     }
-    drawMainScreen();
+    if (_errorScreen) {
+        drawErrorScreen();
+    } else {
+        drawMainScreen();
+    }
     _display.display();
+}
+
+void DisplayManager::showErrorScreen(const char *headline, const char *detail) {
+    updateDistanceText(headline, detail);
+    _errorScreen = true;
+}
+
+void DisplayManager::clearErrorScreen() {
+    _errorScreen = false;
+    _distIsText = false;
+    _distDetail[0] = '\0';
 }
 
 // ── Private drawing helpers ────────────────────────────────────────
@@ -291,6 +396,19 @@ void DisplayManager::drawMainScreen() {
     _display.setCursor(0, DIST_Y);
     if (_distIsText) {
         _display.print(_distText);
+        // Remedy line under the headline — centred, size 1.
+        if (_distDetail[0]) {
+            size_t len = strlen(_distDetail);
+            if (len > DETAIL_MAX_CHARS) {
+                len = DETAIL_MAX_CHARS;
+            }
+            _display.setTextSize(1);
+            _display.setCursor((SH1107_WIDTH - (int16_t)len * 6) / 2, DETAIL_Y);
+            for (size_t i = 0; i < len; i++) {
+                _display.write(_distDetail[i]);
+            }
+            _display.setTextSize(3);
+        }
     } else if (_distance != 0.0f) {
         _display.print(_distance, 2);
         _display.print('m');
@@ -308,6 +426,49 @@ void DisplayManager::drawMainScreen() {
     }
     _display.print(_inclination, 1);
     drawDegreeSymbol(INC_Y);
+}
+
+void DisplayManager::drawErrorScreen() {
+    _display.clearDisplay();
+    _display.setTextColor(SH110X_WHITE);
+
+    // Keep the status strip — battery and link state still matter mid-error,
+    // and they sit above the space the readings used to take.
+    _display.setTextSize(2);
+    if (_btConnected) {
+        _display.setCursor(BT_X, BT_Y);
+        _display.print(F("BT"));
+    }
+    drawBattery(_battery);
+
+    // Headline, size 3, centred.
+    size_t hlen = strlen(_distText);
+    if (hlen > ERR_HEAD_MAX_CHARS) {
+        hlen = ERR_HEAD_MAX_CHARS;
+    }
+    _display.setTextSize(3);
+    _display.setCursor((SH1107_WIDTH - (int16_t)hlen * 18) / 2, ERR_HEAD_Y);
+    for (size_t i = 0; i < hlen; i++) {
+        _display.write(_distText[i]);
+    }
+
+    _display.drawFastHLine(ERR_RULE_INSET, ERR_RULE_Y, SH1107_WIDTH - 2 * ERR_RULE_INSET,
+                           SH110X_WHITE);
+
+    // Remedy, size 2, wrapped and centred as a block in the lower half.
+    char lines[ERR_BODY_LINES][ERR_BODY_COLS + 1];
+    uint8_t n = wrapWords(_distDetail, lines, ERR_BODY_LINES);
+    if (n == 0) {
+        return;
+    }
+    int16_t blockH = (int16_t)n * ERR_BODY_LINE_H - (ERR_BODY_LINE_H - 16);
+    int16_t y = ERR_BODY_TOP + ((SH1107_HEIGHT - ERR_BODY_TOP) - blockH) / 2;
+    _display.setTextSize(2);
+    for (uint8_t i = 0; i < n; i++) {
+        int16_t len = (int16_t)strlen(lines[i]);
+        _display.setCursor((SH1107_WIDTH - len * 12) / 2, y + (int16_t)i * ERR_BODY_LINE_H);
+        _display.print(lines[i]);
+    }
 }
 
 void DisplayManager::drawDegreeSymbol(int16_t y) {

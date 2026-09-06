@@ -18,8 +18,12 @@ class DisplayManager {
     /// Update distance label (meters). 0 = blank.
     void updateDistance(float distance);
 
-    /// Update distance label with arbitrary text (e.g. anomaly message)
-    void updateDistanceText(const char *text);
+    /// Update distance label with arbitrary text (e.g. an error headline).
+    /// `detail` is an optional second line drawn small underneath it — use it
+    /// for the remedy ("Dim target: use card"). Max 7 chars show at the
+    /// headline's size 3, 21 at the detail's size 1. Passing no detail clears
+    /// any previous one; the pair is hidden again by any distance update.
+    void updateDistanceText(const char *text, const char *detail = nullptr);
 
     /// Update azimuth label (degrees)
     void updateAzimuth(float azimuth);
@@ -38,6 +42,17 @@ class DisplayManager {
 
     /// Update measure-from indicator (true = Front, false = Back)
     void updateMeasureFrom(bool front);
+
+    /// Take over the whole panel with an error: a size-3 headline (max 7
+    /// chars) over a size-2 remedy wrapped to at most 3 lines of 10 columns.
+    /// `detail` may use '\n' to choose its own breaks. Stays up — including
+    /// across refresh() — until clearErrorScreen(); the caller owns how long
+    /// that is. Use instead of updateDistanceText when the readings behind
+    /// the error are stale and not worth the space.
+    void showErrorScreen(const char *headline, const char *detail);
+
+    /// Return to the normal readings screen after showErrorScreen().
+    void clearErrorScreen();
 
     /// Clear display to black
     void blankScreen();
@@ -69,7 +84,9 @@ class DisplayManager {
     // Cached display state (set by updateXxx, drawn by refresh)
     float _distance = 0.0f;
     char _distText[16] = "";
+    char _distDetail[24] = "";
     bool _distIsText = false;
+    bool _errorScreen = false;
     float _azimuth = 0.0f;
     float _inclination = 0.0f;
     float _battery = 0.0f;
@@ -78,6 +95,7 @@ class DisplayManager {
     bool _measureFromFront = false;
 
     void drawMainScreen();
+    void drawErrorScreen();
     void drawBattery(float pct);
     void drawDegreeSymbol(int16_t y);
 };

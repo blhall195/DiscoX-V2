@@ -6,7 +6,10 @@ namespace Defaults {
 constexpr float magTolerance = 10.0f;  // degrees
 constexpr float gravTolerance = 10.0f; // degrees
 constexpr float dipTolerance = 10.0f;  // degrees
-constexpr bool anomalyDetection = true;
+// Off as shipped: with the embedded V1 placeholder calibration every shot
+// flags MagErr, which trains you to ignore the warning. Turn back on once a
+// device has had its own on-device calibration (commissioning item #1).
+constexpr bool anomalyDetection = false;
 constexpr float stabilityTolerance = 0.5f;    // degrees
 constexpr float quickShotStabilityTol = 8.0f; // degrees (wider for splay shots)
 constexpr uint8_t stabilityBufferLength = 5;
@@ -18,8 +21,8 @@ constexpr float legAngleTolerance = 1.7f;       // degrees
 constexpr float cartesianTolerance = 10.0f;     // cm (BCRA grade 5)
 constexpr float cartesianToleranceMin = 1.0f;   // cm
 constexpr float cartesianToleranceMax = 200.0f; // cm
-constexpr float laserDistanceOffset = 0.162f;   // meters added when measuring from back
-constexpr float laserFrontOffset = 0.03f;       // meters subtracted when measuring from front
+constexpr float laserDistanceOffset = 0.12f;    // meters added when measuring from back
+constexpr float laserFrontOffset = 0.02f;       // meters subtracted when measuring from front
 constexpr float calMagConsistency = 0.5f;       // degrees (angular consistency window for mag)
 constexpr float calGravConsistency = 0.4f;      // degrees (angular consistency window for gravity)
 constexpr uint8_t calBufferLength = 5;          // samples for calibration consistency window
@@ -37,12 +40,16 @@ constexpr bool laserWibble = true;              // blink laser on leg detect
 // returned only if enough survive and they agree within laserSpreadLimitMm.
 constexpr uint8_t laserShotsMax = 5;  // buffer size / settings clamp
 constexpr uint8_t laserShots = 1;     // default: single shot, SQ-gated — fast
-constexpr uint16_t laserSqLimit = 0;      // reject shots with SQ BELOW this; 0 = gate disabled
+constexpr uint16_t laserSqLimit = 50;     // reject shots with SQ BELOW this; 0 = gate disabled
 constexpr uint16_t laserSpreadLimitMm = 25;
 constexpr uint32_t laserMinDistanceMm = 30;     // module rated minimum
 constexpr uint32_t laserMaxDistanceMm = 100000; // rated max at reflectivity 1.0
 constexpr bool measureFromFront = false;        // false = Back (add offset), true = Front (raw laser)
-constexpr bool splaysEnabled = false;           // enable splay shots on button 2 short press
+// Splay shots on a UP_DISCO (B2) short press, on out of the box. The menu
+// toggle was removed 2026-09-06 — this is now the value a device without a
+// stored config.json comes up with. A device that already has one keeps
+// whatever is in it; `splays_enabled` stays editable via USB drive mode.
+constexpr bool splaysEnabled = true;
 constexpr uint8_t screenBrightness = 255;       // OLED contrast 0-255
 constexpr char bleName[] = "SAP6_DiscoX";
 constexpr uint8_t bleNameMaxLen = 20; // max chars for BLE name
