@@ -831,6 +831,7 @@ void loop() {
     checkLaserTimeout(now);
     updateDisplay(now);
     disco.update(lastAccX, lastAccY, lastAccZ);
+    Sounds::updateMelody(); // advances the disco tune; no-op when not playing
 
     // ── Deferred flash write: sync RAM-buffered readings when idle ──
     if (ctx.currentState == SystemState::IDLE && flashOk && configMgr.hasPendingToSync()) {
@@ -1016,7 +1017,8 @@ static void readSensorsUpdate(uint32_t now) {
 //   >SWEEP <fromHz> <toHz> <durationMs>
 //   >MELODY <freq:ms>,<freq:ms>,...     (freq 0 = rest/silence)
 //   >SOUND <name>                       click|shot|reading|leg|warning|
-//                                        error|snakestart|snakeeat|snakecrash
+//                                        error|snakestart|snakeeat|snakecrash|
+//                                        mario (non-blocking, runs until STOP)
 //   >STOP                               silence immediately (best-effort —
 //                                        the driver is a blocking bit-bang,
 //                                        so this only takes effect between
@@ -1096,12 +1098,17 @@ static void handleBuzzerTestLine(char *line) {
             Sounds::snakeEat(0);
         } else if (strcasecmp(name, "snakecrash") == 0) {
             Sounds::snakeCrash(0);
+        } else if (strcasecmp(name, "mario") == 0) {
+            // The one non-blocking sound: this returns immediately and the
+            // tune runs from the loop until >STOP (or any button in disco).
+            Sounds::startMelody();
         } else {
             Serial.println(F("ERR unknown sound name"));
             return;
         }
         Serial.println(F("OK"));
     } else if (strcasecmp(cmd, "STOP") == 0) {
+        Sounds::stopMelody();
         buzzer.off();
         Serial.println(F("OK"));
     } else {
@@ -1133,6 +1140,9 @@ static void startDisco() {
 
 static void stopDisco() {
     disco.turnOff();
+    // The tune is part of the disco, so it dies with it — whether disco was
+    // ended by its own hold, a mode change, or the auto-shutoff.
+    Sounds::stopMelody();
     ctx.discoOn = false;
     laser.setLaser(false);
     ctx.laserEnabled = false;
@@ -1147,6 +1157,9 @@ static void prepareForShot() {
     // Re-sighting is the answer to every laser error, so don't make the user
     // wait out the hold once they've started doing it.
     dismissErrorScreen();
+    // Back to surveying — the tune goes quiet (and the blocking shot sounds
+    // need the buzzer pins back from PWM anyway).
+    Sounds::stopMelody();
 
     // Setup laser
     laserOn();
@@ -1160,6 +1173,7 @@ static void prepareForShot() {
 // Call after prepare for shot
 static void startShot(bool isQuickShot) {
     dismissErrorScreen();
+    Sounds::stopMelody();
     ctx.quickShot = isQuickShot;
     ctx.displayFrozen = false;
     ctx.currentState = SystemState::TAKING_MEASUREMENT;
@@ -1231,12 +1245,29 @@ static void pollButtons(uint32_t now) {
         laser.setLaser(false);
         ctx.laserEnabled = false;
         disco.turnOff();
+        Sounds::stopMelody();
         ctx.discoOn = false;
         menuMgr.begin(display.getDisplay(), ctx, configMgr);
         return;
     }
 
-    // Button 3 (DOWN) is unused in normal mode.
+    // Button 3 (DOWN): Mario theme, but only as a disco easter egg — outside
+    // disco mode DOWN stays unused, so a stray press underground can't start
+    // a tune. Press again to stop it without leaving the disco.
+    if (buttons.wasPressed(Button::DOWN) && ctx.currentState == SystemState::IDLE) {
+        ctx.lastActivityTime = now;
+        if (ctx.discoOn) {
+            if (Sounds::melodyPlaying()) {
+                Sounds::stopMelody();
+                Serial.println(F("DISCO: mario off"));
+            } else {
+                Sounds::startMelody();
+                Serial.println(F("DISCO: mario on"));
+            }
+        }
+        return;
+    }
+
     // Power off is the hardware power button — see pollPowerButton().
 }
 

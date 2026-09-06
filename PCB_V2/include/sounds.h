@@ -32,4 +32,15 @@ void snakeStart();             // game begins: quick rising "ready" chirp
 void snakeEat(uint16_t score); // food eaten: pickup blip that climbs with the score
 void snakeCrash(uint8_t n);    // game over: falling womp per red flash (n = 0,1,2…)
 
+// ── Background melody (the ONLY non-blocking sound) ──────────────────
+// Everything above blocks for its whole duration, which is fine at ~0.6 s
+// but impossible for a tune: the loop must keep running so the LEDs animate
+// and the buttons that stop it still get polled. startMelody() returns
+// immediately and updateMelody() must be called every loop iteration to
+// advance the notes.
+void startMelody(); // disco easter egg: Mario theme, loops until stopped
+void updateMelody();
+void stopMelody();
+bool melodyPlaying();
+
 } // namespace Sounds

@@ -28,10 +28,29 @@ class Buzzer {
     // Convenience: a beep at the element's resonant frequency.
     void beep(uint32_t durationMs) { tone(RESONANT_HZ, durationMs); }
 
+    // ── Non-blocking tone (hardware PWM) ─────────────────────────────
+    // startTone() returns immediately and the note keeps sounding until
+    // stopTone(). Needed for anything longer than a beep: the bit-bang
+    // tone()/sweep() above hold the CPU for their whole duration, which
+    // would freeze the super-loop — no buttons, no LED animation, no BLE.
+    //
+    // Uses one PWM peripheral with both pins on it, the second inverted, so
+    // the antiphase push-pull drive (and its doubled swing) is preserved
+    // with zero CPU. NeoPixel claims the first PWM instance it finds free
+    // and is left PWM0; the core's tone() hard-codes PWM2. This takes PWM1.
+    void startTone(uint32_t freqHz);
+    void stopTone();
+    bool toneActive() const { return pwmActive_; }
+
     // Force both pins LOW (no DC across the element).
     void off();
 
   private:
     uint8_t pinA_ = 0xFF;
     uint8_t pinB_ = 0xFF;
+    bool pwmActive_ = false;
+
+    // Hand the pins back to GPIO before any bit-bang output: while PWM owns
+    // them digitalWrite() does nothing.
+    void releasePwm();
 };
