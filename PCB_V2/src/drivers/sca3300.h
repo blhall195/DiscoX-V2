@@ -42,6 +42,13 @@ class SCA3300 {
     static constexpr uint16_t STATUS_MODE_CHANGE = 1u << 1;
     static constexpr uint16_t STATUS_PIN_CONTINUITY = 1u << 0;
 
+    // Flags Table 26 says need a SW/HW reset rather than just a status clear.
+    // SAT and TEMP_SAT are transient (over-range input, ambient temperature)
+    // and PD is handled by waking the sensor instead.
+    static constexpr uint16_t STATUS_NEEDS_RESET = STATUS_DIGI1 | STATUS_DIGI2 | STATUS_CLK |
+                                                   STATUS_MEM | STATUS_PIN_CONTINUITY |
+                                                   STATUS_MODE_CHANGE | STATUS_PWR;
+
     static constexpr uint8_t WHOAMI_VALUE = 0x51;
 
     // Full start-up sequence (Table 10): SW reset, set mode, wait for signal
@@ -73,6 +80,23 @@ class SCA3300 {
     bool powerDown();
     bool wakeUp(); // restores the mode passed to begin()
 
+    // Clear a latched fault, re-initialising the sensor if the flags call for
+    // it. RS reads '11' on *every* frame while any flag is active in the
+    // STATUS summary (section 5.1.5), and STATUS is only cleared by reading
+    // it (section 6.3.1) — so without this one transient flag latches the
+    // sensor off permanently and the caller repeats its last sample forever.
+    // readRaw() calls this itself, rate-limited to RECOVERY_RETRY_MS.
+    bool recover();
+
+    // ── Diagnostics for the last fault recover() handled ──────────
+    uint16_t lastStatus() const { return lastStatus_; }  // 0xFFFF = STATUS unreadable
+    uint32_t faultCount() const { return faultCount_; }
+    bool lastRecoveryWasReset() const { return lastRecoveryReset_; }
+
+    static const char *errorName(Error e);
+    // Names of the set STATUS bits, e.g. "PWR|MEM", into buf ("none" if clear)
+    static void statusBitNames(uint16_t status, char *buf, size_t len);
+
     float sensitivity() const; // LSB/g for the active mode
     Mode mode() const { return mode_; }
     Error lastError() const { return lastError_; }
@@ -101,6 +125,10 @@ class SCA3300 {
     static constexpr uint8_t RS_ERROR = 0x03;
 
     static constexpr uint32_t TLH_US = 10; // min CSB high time between frames
+    // Floor between recovery attempts: a SW reset costs ~16 ms of blocking
+    // delay, so a permanently faulted sensor must not drag the 100 Hz loop
+    // down with one on every sample.
+    static constexpr uint32_t RECOVERY_RETRY_MS = 1000;
 
     // One 32-bit frame exchange; returns the response to the *previous* command
     uint32_t transfer(uint32_t frame);
@@ -110,6 +138,13 @@ class SCA3300 {
     bool readRegister(uint32_t cmd, uint16_t &data);
     // Clear STATUS and confirm RS returns to '01' (start-up steps 6-8)
     bool clearStatus();
+    // Start-up sequence minus the SPI/pin setup, so recover() can reuse it
+    bool startup();
+    // Read STATUS *and* clear it, keeping the data from the frame whose RS is
+    // still '11'. readStatus() cannot: readRegister validates that frame and
+    // throws the payload away, which is exactly the frame carrying the flags.
+    bool readAndClearStatus(uint16_t &status);
+    bool readRawInternal(Reading &out, bool allowRecovery);
 
     static uint8_t crc8(uint32_t frame);
 
@@ -118,6 +153,11 @@ class SCA3300 {
     Mode mode_ = Mode::MODE_1;
     uint8_t rs_ = 0;
     Error lastError_ = Error::NONE;
+    uint16_t lastStatus_ = 0;
+    uint32_t faultCount_ = 0;
+    uint32_t lastRecoveryMs_ = 0;
+    bool recoveryAttempted_ = false;
+    bool lastRecoveryReset_ = false;
     // Datasheet recommends 2-4 MHz for best noise performance (8 MHz max)
     SPISettings settings_{2000000, MSBFIRST, SPI_MODE0};
 };

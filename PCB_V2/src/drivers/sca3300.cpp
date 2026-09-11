@@ -11,9 +11,14 @@ bool SCA3300::begin(SPIClass &spi, uint8_t csPin, Mode mode) {
     digitalWrite(csPin_, HIGH);
     spi_->begin();
 
-    // Table 10 start-up sequence. Power-on start-up time is 1 ms; assume the
-    // rail is already stable by the time begin() is called.
+    // Power-on start-up time is 1 ms; assume the rail is already stable by
+    // the time begin() is called.
     delay(2);
+    return startup();
+}
+
+// Table 10 start-up sequence, minus the SPI/pin setup begin() does once.
+bool SCA3300::startup() {
     transfer(CMD_SW_RESET);
     delay(1); // memory read + signal path settling after reset
 
@@ -44,7 +49,9 @@ bool SCA3300::readAcceleration(float &gx, float &gy, float &gz) {
     return true;
 }
 
-bool SCA3300::readRaw(Reading &out) {
+bool SCA3300::readRaw(Reading &out) { return readRawInternal(out, true); }
+
+bool SCA3300::readRawInternal(Reading &out, bool allowRecovery) {
     // Off-frame protocol: each response belongs to the previous command, so
     // chain the three axis reads and use a trailing frame to collect Z.
     transfer(CMD_READ_ACC_X); // response to whatever came before — discard
@@ -52,6 +59,15 @@ bool SCA3300::readRaw(Reading &out) {
     uint32_t ry = transfer(CMD_READ_ACC_Z);
     uint32_t rz = transfer(CMD_READ_ACC_X);
     if (!validate(rx) || !validate(ry) || !validate(rz)) {
+        // A latched STATUS flag fails every future frame until STATUS is
+        // read, so clear it and take one more look before giving up.
+        if (allowRecovery) {
+            Error fault = lastError_;
+            if (recover()) {
+                return readRawInternal(out, false);
+            }
+            lastError_ = fault; // report what faulted, not how recovery went
+        }
         return false;
     }
     out.x = static_cast<int16_t>((rx >> 8) & 0xFFFF);
@@ -120,6 +136,106 @@ bool SCA3300::wakeUp() {
     }
     delay(mode_ == Mode::MODE_4 ? 100 : 15);
     return clearStatus();
+}
+
+bool SCA3300::recover() {
+    uint32_t now = millis();
+    if (recoveryAttempted_ && (now - lastRecoveryMs_) < RECOVERY_RETRY_MS) {
+        return false;
+    }
+    recoveryAttempted_ = true;
+    lastRecoveryMs_ = now;
+    ++faultCount_;
+    lastRecoveryReset_ = false;
+
+    uint16_t status = 0;
+    if (!readAndClearStatus(status)) {
+        // STATUS itself unreadable — bus or CRC trouble, not a sensor flag.
+        // A reset is the only remaining move.
+        lastStatus_ = 0xFFFF;
+        lastRecoveryReset_ = true;
+        return startup();
+    }
+    lastStatus_ = status;
+
+    if (status & STATUS_NEEDS_RESET) {
+        lastRecoveryReset_ = true;
+        return startup();
+    }
+    if (status & STATUS_PD) {
+        lastRecoveryReset_ = true;
+        return wakeUp();
+    }
+    // SAT / TEMP_SAT only: the flag is transient and reading STATUS above
+    // already cleared it, so the next frame should come back RS '01'.
+    return true;
+}
+
+bool SCA3300::readAndClearStatus(uint16_t &status) {
+    // Section 6.3.1: frame 1 answers the previous command, frame 2 carries the
+    // flags but still reports RS '11', frame 3 confirms RS is back to '01'
+    // with STATUS now zero. Validating frame 2 would discard the flags, so
+    // only its CRC is checked here.
+    transfer(CMD_READ_STATUS);
+    uint32_t flagged = transfer(CMD_READ_STATUS);
+    uint32_t cleared = transfer(CMD_READ_STATUS);
+    if (crc8(flagged) != (flagged & 0xFF)) {
+        lastError_ = Error::CRC;
+        return false;
+    }
+    status = (flagged >> 8) & 0xFFFF;
+    return validate(cleared);
+}
+
+const char *SCA3300::errorName(Error e) {
+    switch (e) {
+    case Error::NONE:
+        return "none";
+    case Error::CRC:
+        return "CRC mismatch (bus/wiring)";
+    case Error::STARTUP:
+        return "sensor still starting up";
+    case Error::SENSOR_FLAG:
+        return "sensor error flag (see STATUS)";
+    case Error::WHOAMI:
+        return "WHOAMI mismatch";
+    }
+    return "unknown";
+}
+
+void SCA3300::statusBitNames(uint16_t status, char *buf, size_t len) {
+    if (buf == nullptr || len == 0) {
+        return;
+    }
+    if (status == 0xFFFF) {
+        snprintf(buf, len, "unreadable");
+        return;
+    }
+    static const struct {
+        uint16_t mask;
+        const char *name;
+    } kBits[] = {
+        {STATUS_DIGI1, "DIGI1"}, {STATUS_DIGI2, "DIGI2"},
+        {STATUS_CLK, "CLK"},     {STATUS_SAT, "SAT"},
+        {STATUS_TEMP_SAT, "TEMP_SAT"}, {STATUS_PWR, "PWR"},
+        {STATUS_MEM, "MEM"},     {STATUS_PD, "PD"},
+        {STATUS_MODE_CHANGE, "MODE_CHANGE"}, {STATUS_PIN_CONTINUITY, "PIN_CONTINUITY"},
+    };
+    buf[0] = '\0';
+    size_t used = 0;
+    for (const auto &bit : kBits) {
+        if (!(status & bit.mask)) {
+            continue;
+        }
+        int n = snprintf(buf + used, len - used, "%s%s", used ? "|" : "", bit.name);
+        if (n <= 0 || static_cast<size_t>(n) >= len - used) {
+            return; // truncated
+        }
+        used += n;
+    }
+    if (used == 0) {
+        snprintf(buf, len, "none");
+    }
 }
 
 float SCA3300::sensitivity() const {

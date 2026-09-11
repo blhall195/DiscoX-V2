@@ -129,6 +129,18 @@ static bool deviceMoving = false;
 static constexpr float ACCEL_MOTION_EMA_ALPHA = 0.2f;  // smoothing for the reference vector
 static constexpr float ACCEL_MOTION_THRESHOLD = 0.35f; // m/s² deviation = "moving"
 
+// ── Accel fault tracking ────────────────────────────────────────────
+// A latched SCA3300 STATUS flag fails every subsequent frame until STATUS is
+// read (datasheet 5.1.5/6.3.1). The driver now clears it and retries, but if
+// reads keep failing lastAcc* would sit unchanged and the frozen inclination
+// would still read as live — so track it, say so, and refuse to shoot on it.
+static uint32_t accelFailSince = 0;   // millis() of the first failure in this run (0 = healthy)
+static uint32_t accelFaultLogged = 0; // driver faultCount() already reported
+static uint32_t accelToastTime = 0;   // millis() the fault last took the panel (0 = never)
+static bool accelStale = false;
+static constexpr uint32_t ACCEL_STALE_MS = 2000;         // failing this long = not live
+static constexpr uint32_t ACCEL_TOAST_REPEAT_MS = 30000; // re-nag interval while stale
+
 static float lastDistance = 0;
 
 // ── Boot-time field strength sanity check ────────────────────────────
@@ -845,6 +857,46 @@ void loop() {
 // ── Polling Functions ─────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 
+// ── Accel read failed — report it and decide if the data is stale ──
+static void reportAccelFault(uint32_t now) {
+    if (accelFailSince == 0) {
+        accelFailSince = now;
+    }
+
+    // One line per fault the driver actually handled, not per failed sample.
+    // This is the diagnostic: the STATUS bits say *why* the sensor dropped
+    // out, and they are gone the moment recover() reads them.
+    uint32_t faults = accel.faultCount();
+    if (faults != accelFaultLogged) {
+        accelFaultLogged = faults;
+        char bits[80];
+        SCA3300::statusBitNames(accel.lastStatus(), bits, sizeof(bits));
+        Serial.print(F("ACCEL fault #"));
+        Serial.print(faults);
+        Serial.print(F(": "));
+        Serial.print(SCA3300::errorName(accel.lastError()));
+        Serial.print(F("  STATUS="));
+        Serial.print(bits);
+        Serial.println(accel.lastRecoveryWasReset() ? F("  (sensor reset)")
+                                                    : F("  (status cleared)"));
+    }
+
+    if (now - accelFailSince < ACCEL_STALE_MS) {
+        return; // a dropped sample or two is normal — recovery takes ~16 ms
+    }
+
+    if (!accelStale) {
+        accelStale = true;
+        Serial.println(F("ACCEL: readings stale — inclination is not live, measurements blocked"));
+    }
+
+    if (dispOk && (accelToastTime == 0 || now - accelToastTime >= ACCEL_TOAST_REPEAT_MS)) {
+        accelToastTime = now;
+        display.showErrorScreen("TILT", "fault: no\nlive tilt\ndata");
+        errorToastTime = millis();
+    }
+}
+
 // ── Read sensors + update fusion at 50 Hz ───────────────────────
 static void readSensorsUpdate(uint32_t now) {
     if (now - lastSensorUpdate < Timing::SENSOR_POLL_MS) {
@@ -882,6 +934,16 @@ static void readSensorsUpdate(uint32_t now) {
             accEmaX += ACCEL_MOTION_EMA_ALPHA * dx;
             accEmaY += ACCEL_MOTION_EMA_ALPHA * dy;
             accEmaZ += ACCEL_MOTION_EMA_ALPHA * dz;
+
+            if (accelStale) {
+                Serial.println(F("ACCEL: readings live again"));
+                accelStale = false;
+                accelToastTime = 0;
+                dismissErrorScreen();
+            }
+            accelFailSince = 0;
+        } else {
+            reportAccelFault(now);
         }
     }
 
@@ -1281,7 +1343,7 @@ static void pollMeasurement(uint32_t now) {
         return;
     }
 
-    if (!calOk || !magOk || !accelOk || !laserOk) {
+    if (!calOk || !magOk || !accelOk || accelStale || !laserOk) {
         Serial.println(F("MEAS: sensors not ready"));
         ctx.quickShot = false;
         ctx.currentState = SystemState::IDLE;
