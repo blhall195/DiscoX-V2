@@ -194,6 +194,7 @@ uint16_t melodyIndex = 0;
 uint32_t noteStart = 0;
 bool melodyOn = false;
 bool inGap = false;
+uint32_t noteSerial = 0; // steps once per slot started (rests included)
 
 void beginNote() {
     if (!buzzer) {
@@ -202,6 +203,7 @@ void beginNote() {
     const Note &n = melody[melodyIndex];
     inGap = false;
     noteStart = millis();
+    noteSerial++;
     if (n.freq == 0) {
         buzzer->stopTone();
     } else {
@@ -234,6 +236,15 @@ void stopMelody() {
 }
 
 bool melodyPlaying() { return melodyOn; }
+
+uint32_t melodyNoteSerial() { return noteSerial; }
+
+uint16_t melodyNoteFreq() {
+    if (!melodyOn || melody == nullptr) {
+        return 0;
+    }
+    return melody[melodyIndex].freq;
+}
 
 void updateMelody() {
     if (!melodyOn || !buzzer) {

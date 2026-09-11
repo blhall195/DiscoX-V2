@@ -210,6 +210,7 @@ static void initDisco();
 // ── Forward declarations — polling ──────────────────────────────────
 static void pollPowerButton(uint32_t now);
 static void readSensorsUpdate(uint32_t now);
+static void syncDiscoToMelody();
 static void pollButtons(uint32_t now);
 static void pollMeasurement(uint32_t now);
 static void pollBLEPin(uint32_t now);
@@ -842,8 +843,9 @@ void loop() {
     checkAutoShutoff(now);
     checkLaserTimeout(now);
     updateDisplay(now);
-    disco.update(lastAccX, lastAccY, lastAccZ);
     Sounds::updateMelody(); // advances the disco tune; no-op when not playing
+    syncDiscoToMelody();    // ...and hands each new note to the LEDs
+    disco.update(lastAccX, lastAccY, lastAccZ);
 
     // ── Deferred flash write: sync RAM-buffered readings when idle ──
     if (ctx.currentState == SystemState::IDLE && flashOk && configMgr.hasPendingToSync()) {
@@ -856,6 +858,30 @@ void loop() {
 // ═══════════════════════════════════════════════════════════════════
 // ── Polling Functions ─────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
+
+// ── Mario → LED sync ───────────────────────────────────────────────
+// Every note of the tune gets its own flash, coloured by pitch, so the disco
+// dances to the melody instead of running its own rainbow. Polled from the
+// loop rather than pushed from Sounds, which keeps the sound vocabulary free
+// of any LED dependency.
+static uint32_t lastMelodyNote = 0;
+static bool melodyDrivingDisco = false;
+
+static void syncDiscoToMelody() {
+    if (Sounds::melodyPlaying()) {
+        uint32_t serial = Sounds::melodyNoteSerial();
+        if (serial != lastMelodyNote) {
+            lastMelodyNote = serial;
+            disco.noteHit(Sounds::melodyNoteFreq());
+            melodyDrivingDisco = true;
+        }
+        return;
+    }
+    if (melodyDrivingDisco) {
+        melodyDrivingDisco = false;
+        disco.clearMusicSync();
+    }
+}
 
 // ── Accel read failed — report it and decide if the data is stale ──
 static void reportAccelFault(uint32_t now) {

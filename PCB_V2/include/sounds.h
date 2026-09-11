@@ -43,4 +43,12 @@ void updateMelody();
 void stopMelody();
 bool melodyPlaying();
 
+// ── Melody → LED sync ───────────────────────────────────────────────
+// Lets the caller flash the lights in time with the tune. The serial number
+// steps on every slot the melody starts, rests included, so "a new note just
+// began" is a change in this value — no need to poll faster than the music.
+// Polled rather than pushed so Sounds stays free of any LED dependency.
+uint32_t melodyNoteSerial();
+uint16_t melodyNoteFreq(); // Hz of the current slot, 0 = rest
+
 } // namespace Sounds

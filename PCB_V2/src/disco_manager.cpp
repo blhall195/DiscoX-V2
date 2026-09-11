@@ -14,7 +14,24 @@ void DiscoManager::begin() {
 void DiscoManager::update(float accelX, float accelY, float accelZ) {
     uint32_t now = millis();
 
-    if (effect_ == DiscoEffect::DISCO) {
+    if (effect_ == DiscoEffect::DISCO && musicSync_) {
+        // The tune is driving: fade the last note's flash instead of running
+        // the rainbow. Shake/wild is deliberately ignored here — the melody
+        // owns the brightness while it plays.
+        if (now - lastEnvTime_ >= ENVELOPE_MS) {
+            float dt = (now - lastEnvTime_) / 1000.0f;
+            lastEnvTime_ = now;
+            noteBright_ -= NOTE_DECAY_PER_SEC * dt;
+            if (noteBright_ < 0.0f) {
+                noteBright_ = 0.0f;
+            }
+            uint8_t r, g, b;
+            hsvToRgb(noteHue_, 1.0f, 1.0f, r, g, b);
+            brightness_ = noteBright_; // setPixel scales by this
+            setPixel(r, g, b);
+        }
+
+    } else if (effect_ == DiscoEffect::DISCO) {
         // --- Shake detection for wild mode ---
         if (fabsf(accelX) > Disco::SHAKE_THRESHOLD || fabsf(accelY) > Disco::SHAKE_THRESHOLD ||
             fabsf(accelZ) > Disco::SHAKE_THRESHOLD) {
@@ -110,6 +127,37 @@ void DiscoManager::turnOn() {
     lastFrameTime_ = millis();
 }
 
+void DiscoManager::noteHit(uint16_t freqHz) {
+    if (effect_ != DiscoEffect::DISCO) {
+        return; // tune without the disco running — nothing to flash
+    }
+    musicSync_ = true;
+    lastEnvTime_ = millis();
+
+    if (freqHz == 0) {
+        noteBright_ = 0.0f; // rest: go dark and stay there until the next note
+        return;
+    }
+
+    float t = (float)(freqHz - MUSIC_MIN_HZ) / (float)(MUSIC_MAX_HZ - MUSIC_MIN_HZ);
+    if (t < 0.0f) {
+        t = 0.0f;
+    } else if (t > 1.0f) {
+        t = 1.0f;
+    }
+    noteHue_ = t;
+    noteBright_ = Disco::WILD_BRIGHTNESS; // every note attacks at full
+}
+
+void DiscoManager::clearMusicSync() {
+    if (!musicSync_) {
+        return;
+    }
+    musicSync_ = false;
+    brightness_ = Disco::BASE_BRIGHTNESS;
+    lastFrameTime_ = millis(); // resume the rainbow from now, not mid-fade
+}
+
 void DiscoManager::setPurple() {
     stopAll();
     effect_ = DiscoEffect::PURPLE_PULSE;
@@ -122,6 +170,8 @@ void DiscoManager::setPurple() {
 void DiscoManager::stopAll() {
     effect_ = DiscoEffect::OFF;
     wildLatched_ = false;
+    musicSync_ = false;
+    noteBright_ = 0.0f;
     brightness_ = Disco::BASE_BRIGHTNESS;
     pixel_.setPixelColor(0, 0);
     pixel_.show();
