@@ -1,5 +1,7 @@
 #include "display_manager.h"
 
+#include "version.h"
+
 // ── Layout constants (match Python display_manager.py positions) ────
 // Battery icon — top-right
 static constexpr int16_t BAT_X = 90;
@@ -326,13 +328,20 @@ void DisplayManager::showSplash(bool laserOn, const char *nameSuffix) {
     }
 
     // ── Bottom text: BLE name suffix (blank until config loaded) ───
+    _display.setTextSize(1);
     if (nameSuffix && nameSuffix[0]) {
-        _display.setTextSize(1);
         // Centre the name suffix on the 128-px wide screen (6px per char at size 1)
         int16_t tw = (int16_t)strlen(nameSuffix) * 6;
         _display.setCursor((128 - tw) / 2, 108);
         _display.print(nameSuffix);
     }
+
+    // ── Firmware version, under the name ───────────────────────────
+    // Fixed line so it does not jump when the name appears: the first splash
+    // is drawn before the config is loaded and has no suffix yet.
+    int16_t vw = (int16_t)strlen(FIRMWARE_VERSION) * 6;
+    _display.setCursor((128 - vw) / 2, 118);
+    _display.print(FIRMWARE_VERSION);
 
     _display.display();
 }

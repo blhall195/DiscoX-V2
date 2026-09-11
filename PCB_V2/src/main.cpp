@@ -11,6 +11,7 @@
 #include "drivers/max17048.h"
 #include "drivers/power.h"
 #include "drivers/sca3300.h"
+#include "version.h"
 #include "laser_manager.h"
 #include "mag_cal/calibration.h"
 #include "math_utils.h"
@@ -328,6 +329,8 @@ void setup() {
 
     Serial.println(F("=== Mr_Zappy PCB V2 ==="));
     Serial.println(F("Merged single-MCU firmware"));
+    Serial.print(F("Firmware "));
+    Serial.println(FIRMWARE_VERSION); // same string the splash shows
     Serial.println();
 
     initPins();
