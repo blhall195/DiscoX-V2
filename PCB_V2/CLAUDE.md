@@ -97,7 +97,7 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 
 | Mode | FIRE (B1) | UP_DISCO (B2) | DOWN (B3) | MENU (B4) |
 |------|-----------|---------------|-----------|-----------|
-| Normal | take shot / wake laser | hold: disco toggle; short: splay shot | — | enter settings menu |
+| Normal | take shot / wake laser | hold: disco toggle; short: splay shot | laser off (power saver; FIRE wakes it again). Disco on: Mario on/off | enter settings menu |
 | Menu | select | up | down | select |
 | Calibration | record point / F-B shot | finish F/B early; hold combos: save (FIRE+UP) / discard (UP) | undo last point / cancel capture (screen hint "B3:undo") | undo (alias of DOWN); any-button advance on intro screens |
 | Snake | — | turn right | turn left | exit |

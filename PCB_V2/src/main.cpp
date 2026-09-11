@@ -1313,9 +1313,14 @@ static void pollButtons(uint32_t now) {
         return;
     }
 
-    // Button 3 (DOWN): Mario theme, but only as a disco easter egg — outside
-    // disco mode DOWN stays unused, so a stray press underground can't start
-    // a tune. Press again to stop it without leaving the disco.
+    // Button 3 (DOWN): laser off — the laser is the largest continuous draw
+    // while idling and the timeout can be set as long as 30 min, so this is
+    // the manual way to stop burning battery between stations. FIRE brings
+    // it back (prepareForShot), so DOWN only ever turns the beam OFF: a
+    // stray press underground can cost a re-press, never light it unasked.
+    //
+    // Inside disco mode DOWN keeps its Mario easter egg instead — disco is
+    // the play mode, and the tune needs a button to stop it again.
     if (buttons.wasPressed(Button::DOWN) && ctx.currentState == SystemState::IDLE) {
         ctx.lastActivityTime = now;
         if (ctx.discoOn) {
@@ -1326,6 +1331,13 @@ static void pollButtons(uint32_t now) {
                 Sounds::startMelody();
                 Serial.println(F("DISCO: mario on"));
             }
+            return;
+        }
+        if (ctx.laserEnabled) {
+            laserOff();
+            Sounds::click(); // the beam vanishing is the real feedback; this
+                             // just confirms the press registered
+            Serial.println(F("LASER: off (DOWN)"));
         }
         return;
     }
