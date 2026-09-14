@@ -816,9 +816,9 @@ void loop() {
         bool done = calMode.update();
         if (done) {
             Serial.println(F("Calibration mode finished."));
-            // Drain buttons held during save/discard (UP_DISCO or FIRE+UP_DISCO)
+            // Drain buttons held during save/discard (DOWN or UP_DISCO+DOWN)
             // to prevent pollButtons() treating the release as a disco toggle.
-            while (buttons.isPressed(Button::UP_DISCO) || buttons.isPressed(Button::FIRE)) {
+            while (buttons.isPressed(Button::UP_DISCO) || buttons.isPressed(Button::DOWN)) {
                 buttons.update();
                 delay(Timing::LOOP_INTERVAL_MS);
             }

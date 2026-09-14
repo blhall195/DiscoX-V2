@@ -349,19 +349,19 @@ void CalibrationMode::updateCalculatingAlignment() {
 // ── State: SHOW_RESULTS ─────────────────────────────────────────────
 
 void CalibrationMode::updateShowResults() {
-    // Hold FIRE+UP_DISCO to save, hold UP_DISCO alone to discard.
+    // Hold UP_DISCO+DOWN to save, hold DOWN alone to discard.
     // A failed ellipsoid fit can only be discarded — never saved.
-    bool b1 = btns_->isPressed(Button::FIRE);
-    bool b2 = btns_->isPressed(Button::UP_DISCO);
+    bool up = btns_->isPressed(Button::UP_DISCO);
+    bool down = btns_->isPressed(Button::DOWN);
 
-    if (b1 && b2 && !ellipsoidFitFailed()) {
+    if (up && down && !ellipsoidFitFailed()) {
         holdCounter_ += 0.01f;
         if (holdCounter_ >= HOLD_TIME) {
             Serial.println(F("Saving calibration..."));
             state_ = CalibState::SAVING;
             showSavingScreen();
         }
-    } else if (!b1 && b2) {
+    } else if (!up && down) {
         holdCounter_ += 0.01f;
         if (holdCounter_ >= HOLD_TIME) {
             Serial.println(F("Calibration discarded — rebooting to restore saved cal."));
@@ -775,10 +775,10 @@ void CalibrationMode::showResultsScreen() {
         d.println(F("more spread poses."));
 
         d.setCursor(0, 84);
-        d.println(F("Hold B2: Discard+Restart"));
+        d.println(F("Hold DOWN: Discard"));
         d.display();
 
-        Serial.println(F("Ellipsoid fit FAILED — hold DISCO to discard"));
+        Serial.println(F("Ellipsoid fit FAILED — hold DOWN to discard"));
         return;
     }
 
@@ -803,9 +803,9 @@ void CalibrationMode::showResultsScreen() {
         Serial.println(resultGravAcc_, 4);
 
         d.setCursor(0, 72);
-        d.println(F("Hold B1+B2: Save"));
+        d.println(F("Hold UP+DOWN: Save"));
         d.setCursor(0, 84);
-        d.println(F("Hold B2: Discard+Restart"));
+        d.println(F("Hold DOWN: Discard"));
         d.setCursor(0, 100);
         d.println(F("Lower = Better"));
     } else {
@@ -826,15 +826,15 @@ void CalibrationMode::showResultsScreen() {
         Serial.println(F(" deg"));
 
         d.setCursor(0, 94);
-        d.println(F("Hold B1+B2: Save"));
+        d.println(F("Hold UP+DOWN: Save"));
         d.setCursor(0, 106);
-        d.println(F("Hold B2: Discard+Restart"));
+        d.println(F("Hold DOWN: Discard"));
     }
 
     d.display();
 
-    Serial.println(F("Hold MEASURE+DISCO to SAVE"));
-    Serial.println(F("Hold DISCO to DISCARD"));
+    Serial.println(F("Hold UP+DOWN to SAVE"));
+    Serial.println(F("Hold DOWN to DISCARD"));
 }
 
 void CalibrationMode::showSavingScreen() {
@@ -1266,10 +1266,10 @@ void CalibrationMode::updateFBCalculating() {
 }
 
 void CalibrationMode::updateFBResults() {
-    // Hold UP_DISCO to exit (correction is display-only for now, not applied)
-    bool b2 = btns_->isPressed(Button::UP_DISCO);
+    // Hold DOWN to exit (correction is display-only for now, not applied)
+    bool down = btns_->isPressed(Button::DOWN);
 
-    if (b2) {
+    if (down) {
         holdCounter_ += 0.01f;
         if (holdCounter_ >= HOLD_TIME) {
             Serial.println(F("FB: discarded — rebooting to restore saved cal."));
@@ -1487,7 +1487,7 @@ void CalibrationMode::showFBResultsScreen() {
         yHint = 100;
     }
     d.setCursor(0, yHint);
-    d.println(F("Hold B2: Discard+Restart"));
+    d.println(F("Hold DOWN: Discard"));
 
     d.display();
 
