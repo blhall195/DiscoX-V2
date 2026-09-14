@@ -22,7 +22,7 @@ pio device monitor -b 115200
 - `pio run` also emits **`.pio/build/pcb_v2/firmware.uf2`** (post-build step
   `tools/make_uf2.py`) — the image to hand end users for a double-tap-reset
   drag-and-drop update. It covers only the application region
-  (0x26000-0x8C200 as of 2026-09), so the FAT settings partition and the
+  (0x26000-0x8E600 as of 2026-09-14), so the FAT settings partition and the
   LittleFS store holding `config.json` survive the update untouched;
   new settings added by the update are then migrated in on first boot (see
   "Settings migration" below). Development flashing still uses USB DFU.

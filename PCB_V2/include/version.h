@@ -8,4 +8,4 @@
 //
 // Keep it short: the splash line is size 1 (6 px per character) centred on a
 // 128 px screen, so anything past 21 characters is clipped.
-constexpr char FIRMWARE_VERSION[] = "v2.0.0";
+constexpr char FIRMWARE_VERSION[] = "v2.0.1";
