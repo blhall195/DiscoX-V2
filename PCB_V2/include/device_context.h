@@ -70,8 +70,10 @@ struct DeviceContext {
 
     // BLE / connectivity
     bool bleConnected = false;
+    // Readings taken but not yet acknowledged by the phone — the number shown
+    // beside the BT label. Counts up on every measurement and down as
+    // pollBLEDrain() gets each one ACKed.
     uint16_t bleDisconnectionCounter = 0;
-    bool bleReadingsTransferredFlag = false;
 
     // Activity tracking
     uint32_t lastActivityTime = 0;    // millis()

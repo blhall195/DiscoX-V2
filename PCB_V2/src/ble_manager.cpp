@@ -76,7 +76,12 @@ void BleManager::pollConnection() {
             } else {
                 Serial.println("[BLE] Disconnected");
                 _phyRequestPending = false;
-                Bluefruit.Periph.clearBonds();
+                // Bonds are NOT cleared here. The clean slate the V1 lesson
+                // wanted is taken once per power-on in begin(); wiping them on
+                // every dropout instead left the phone holding a bond the
+                // device had forgotten, which is the classic Android "forget
+                // the device to reconnect" trap — and it put LittleFS I/O in
+                // the loop right as the radio restarted advertising.
                 if (!Bluefruit.Advertising.isRunning()) {
                     Bluefruit.Advertising.start(0);
                 }

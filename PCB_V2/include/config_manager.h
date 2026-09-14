@@ -116,13 +116,39 @@ class ConfigManager {
     // /calibration.{json,bin}.
     bool testFileRoundTrip(const uint8_t *data, size_t len);
 
-    // Count lines in /pending.txt + RAM buffer.
+    // Count of readings still awaiting delivery: undelivered lines in
+    // /pending.txt + whatever is still in the RAM buffer.
     uint16_t countPendingReadings();
 
-    // Read each line from flash, parse, call callback. Returns false on IO error.
-    bool flushPendingReadings(void (*callback)(float az, float inc, float dist));
+    // ── Delivery cursor ─────────────────────────────────────────────
+    // A reading leaves /pending.txt only once the phone has ACKed it, so a
+    // dropout mid-flight can never lose one. The cursor is the byte offset of
+    // the oldest undelivered line; the cycle is peek → send → (ACK) → commit.
 
-    // Delete /pending.txt and clear RAM buffer.
+    // True if anything is waiting to be delivered. Cheap — no flash I/O, so
+    // the drain pump can call it every loop tick.
+    bool hasUndelivered() const { return drainPending_ || pendingBufCount_ > 0; }
+
+    // Arm the drain for readings already on flash at boot.
+    void beginDrain();
+
+    // Read the oldest undelivered reading without consuming it. False once
+    // every line has been delivered (or there is no file).
+    bool peekOldestPending(float &az, float &inc, float &dist);
+
+    // Mark the last peeked reading as delivered. Only call once the phone has
+    // acknowledged it — this is the point of no return. Returns false if there
+    // was nothing outstanding (the store was cleared under us), so a stale
+    // in-flight flag can never advance the cursor past a fresh reading.
+    bool commitOldestPending();
+
+    // Drop the fully-delivered file and rearm for new readings. Deliberately
+    // leaves the RAM buffer alone: it may hold readings taken since the drain
+    // started, which have NOT been delivered.
+    bool clearDeliveredPending();
+
+    // Delete /pending.txt, clear the RAM buffer and reset the cursor. This
+    // discards undelivered data on purpose — menu "delete pending readings".
     bool clearPendingReadings();
 
     // ── Flag files (boot mode triggers) ─────────────────────────────
@@ -148,6 +174,24 @@ class ConfigManager {
     };
     PendingEntry pendingBuf_[MAX_PENDING_BUF];
     uint8_t pendingBufCount_ = 0;
+
+    // Delivery cursor into /pending.txt (see the drain API above). RAM-only by
+    // choice: a reboot mid-drain replays already-delivered readings rather than
+    // risking the loss of undelivered ones. A duplicate leg is visible in the
+    // survey app and can be deleted; a missing one is not.
+    uint32_t drainOffset_ = 0;     // start of the oldest undelivered line
+    uint32_t drainNextOffset_ = 0; // just past the last line peeked
+    bool drainPending_ = false;
+    bool drainPeeked_ = false; // a peek is outstanding, so a commit is meaningful
+
+    // Where the outstanding peek came from. Normally always FILE — the pump
+    // syncs the RAM buffer first so the file is the single ordered source.
+    // RAM is the degraded path for when flash cannot take the readings at all.
+    enum class DrainSource : uint8_t { NONE, FILE, RAM };
+    DrainSource drainSource_ = DrainSource::NONE;
+
+    static bool parsePendingLine(char *line, float &az, float &inc, float &dist);
+    bool peekFilePending(float &az, float &inc, float &dist);
 
     void buildFlagPath(const char *name, char *path, size_t pathSize);
 };

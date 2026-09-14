@@ -41,6 +41,7 @@ constexpr uint8_t SAP6_CMD_TAKE_SHOT = 0x38;  // Take a reading
 constexpr uint8_t SAP6_ACK_TABLE[2] = {0x56, 0x55};
 
 constexpr uint32_t SAP6_ACK_TIMEOUT_MS = 5000; // resend after 5 s with no ACK
+constexpr uint32_t SAP6_SEND_RETRY_MS = 500;   // retry after a notify() refusal
 constexpr int SAP6_SEND_QUEUE_MAX = 20;        // max queued leg readings
 
 // One queued survey measurement
@@ -78,6 +79,7 @@ class SAP6Protocol {
     uint32_t sentCount() const { return _sentCount; }
     uint32_t ackedCount() const { return _ackedCount; }
     uint32_t resendCount() const { return _resendCount; }
+    uint32_t failedSendCount() const { return _failedSendCount; }
     bool waitingForAck() const { return _waitingForAck; }
 
   private:
@@ -97,6 +99,7 @@ class SAP6Protocol {
     // Sequence-bit ACK/retry state
     uint8_t _lastSentBit = 0;
     bool _waitingForAck = false;
+    bool _sendFailed = false; // last notify() was refused; retry on the short timer
     uint32_t _lastSendTime = 0;
     uint8_t _currentPacket[17] = {}; // cached for resend
 
@@ -107,6 +110,7 @@ class SAP6Protocol {
     uint32_t _sentCount = 0;
     uint32_t _ackedCount = 0;
     uint32_t _resendCount = 0;
+    uint32_t _failedSendCount = 0;
 };
 
 extern SAP6Protocol sap6;

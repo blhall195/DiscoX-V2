@@ -440,6 +440,7 @@ bool ConfigManager::appendPendingReading(float az, float inc, float dist) {
     }
     if (pendingBufCount_ < MAX_PENDING_BUF) {
         pendingBuf_[pendingBufCount_++] = {az, inc, dist};
+        drainPending_ = true;
         return true;
     }
     return false; // sync failed and buffer still full
@@ -492,64 +493,196 @@ uint16_t ConfigManager::countPendingReadings() {
         return count;
     }
 
-    while (file.available()) {
-        if (file.read() == '\n') {
-            count++;
+    // Count only undelivered lines: everything before the cursor has been
+    // acknowledged by the phone and is just waiting to be dropped.
+    if (drainOffset_ == 0 || file.seek(drainOffset_)) {
+        while (file.available()) {
+            if (file.read() == '\n') {
+                count++;
+            }
         }
     }
     file.close();
     return count;
 }
 
-bool ConfigManager::flushPendingReadings(void (*callback)(float, float, float)) {
-    // First flush any file-based readings
-    if (mounted_) {
-        File file(InternalFS);
-        if (file.open("/pending.txt", FILE_O_READ)) {
-            char line[48];
-            uint8_t pos = 0;
+// ── Delivery cursor ───────────────────────────────────────────────
+// Readings are handed to BLE one at a time and only struck off the flash copy
+// once the phone has acknowledged them. Sending straight from RAM was the V1
+// data-loss bug: a leg taken while connected existed nowhere else, so a
+// dropout before the ACK lost it silently and the device still showed it sent.
 
-            while (file.available()) {
-                int c = file.read();
-                if (c == '\n' || c == '\r') {
-                    if (pos > 0) {
-                        line[pos] = '\0';
-                        // Parse with strtof (sscanf %f broken on newlib-nano)
-                        char *p = line;
-                        char *end;
-                        float az = strtof(p, &end);
-                        if (end != p && *end == ',') {
-                            p = end + 1;
-                            float inc = strtof(p, &end);
-                            if (end != p && *end == ',') {
-                                p = end + 1;
-                                float dist = strtof(p, &end);
-                                if (end != p) {
-                                    callback(az, inc, dist);
-                                }
-                            }
-                        }
-                        pos = 0;
-                    }
-                } else if (pos < sizeof(line) - 1) {
-                    line[pos++] = (char)c;
-                }
+// Parse "az,inc,dist" in place. strtof, not sscanf("%f") — the latter is
+// broken in newlib-nano.
+bool ConfigManager::parsePendingLine(char *line, float &az, float &inc, float &dist) {
+    char *p = line;
+    char *end;
+
+    az = strtof(p, &end);
+    if (end == p || *end != ',') {
+        return false;
+    }
+    p = end + 1;
+    inc = strtof(p, &end);
+    if (end == p || *end != ',') {
+        return false;
+    }
+    p = end + 1;
+    dist = strtof(p, &end);
+    return end != p;
+}
+
+void ConfigManager::beginDrain() {
+    drainOffset_ = 0;
+    drainNextOffset_ = 0;
+    drainPeeked_ = false;
+    drainSource_ = DrainSource::NONE;
+    drainPending_ = true;
+}
+
+bool ConfigManager::peekOldestPending(float &az, float &inc, float &dist) {
+    if (peekFilePending(az, inc, dist)) {
+        drainSource_ = DrainSource::FILE;
+        drainPeeked_ = true;
+        return true;
+    }
+
+    // File exhausted or unusable. Anything still in the RAM buffer is younger
+    // than every line in the file, so it is next in order. The pump only lets
+    // us reach here when the buffer cannot be synced to flash at all — an
+    // unmounted store, or the zombie filesystem that mounts and reads fine but
+    // refuses every commit. Draining from RAM is degraded (a reboot loses it)
+    // but it beats stranding readings that would otherwise never be sent.
+    if (pendingBufCount_ > 0) {
+        az = pendingBuf_[0].az;
+        inc = pendingBuf_[0].inc;
+        dist = pendingBuf_[0].dist;
+        drainSource_ = DrainSource::RAM;
+        drainPeeked_ = true;
+        return true;
+    }
+
+    drainSource_ = DrainSource::NONE;
+    return false;
+}
+
+bool ConfigManager::peekFilePending(float &az, float &inc, float &dist) {
+    if (!mounted_) {
+        return false;
+    }
+
+    File file(InternalFS);
+    if (!file.open("/pending.txt", FILE_O_READ)) {
+        return false; // nothing on flash yet — RAM buffer syncs first
+    }
+    if (drainOffset_ > 0 && !file.seek(drainOffset_)) {
+        file.close();
+        return false;
+    }
+
+    char line[48];
+    bool got = false;
+    uint32_t offset = drainOffset_;
+
+    while (file.available() && !got) {
+        uint8_t pos = 0;
+        while (file.available()) {
+            int c = file.read();
+            offset++;
+            if (c == '\n' || c == '\r') {
+                break;
             }
-            file.close();
+            if (pos < sizeof(line) - 1) {
+                line[pos++] = (char)c;
+            }
+        }
+        line[pos] = '\0';
+
+        if (pos > 0 && parsePendingLine(line, az, inc, dist)) {
+            got = true; // offset now sits just past this record
+        } else {
+            // Blank or unparseable: consume it here rather than let one bad
+            // line stall every reading queued behind it.
+            if (pos > 0) {
+                Serial.println(F("  drain: skipping unparseable pending line"));
+            }
+            drainOffset_ = offset;
         }
     }
 
-    // Then flush RAM buffer entries
-    for (uint8_t i = 0; i < pendingBufCount_; i++) {
-        callback(pendingBuf_[i].az, pendingBuf_[i].inc, pendingBuf_[i].dist);
-    }
-    pendingBufCount_ = 0;
+    file.close();
+    drainNextOffset_ = offset;
+    return got;
+}
 
+bool ConfigManager::commitOldestPending() {
+    if (!drainPending_ || !drainPeeked_) {
+        return false; // store cleared under us (menu delete) — nothing to commit
+    }
+    drainPeeked_ = false;
+    DrainSource source = drainSource_;
+    drainSource_ = DrainSource::NONE;
+
+    if (source == DrainSource::RAM) {
+        if (pendingBufCount_ == 0) {
+            return false; // a sync moved it to flash under us; it gets resent
+        }
+        for (uint8_t i = 1; i < pendingBufCount_; i++) {
+            pendingBuf_[i - 1] = pendingBuf_[i];
+        }
+        pendingBufCount_--;
+        return true;
+    }
+
+    drainOffset_ = drainNextOffset_;
+    return true;
+}
+
+bool ConfigManager::clearDeliveredPending() {
+    // Deleting the file is the one irreversible step in the whole drain, so
+    // prove the cursor really did reach the end first. peekOldestPending()
+    // also comes back empty-handed on a failed seek or read error, and
+    // deleting on the strength of that would throw away undelivered readings —
+    // precisely the bug this rewrite exists to remove.
+    if (mounted_ && InternalFS.exists("/pending.txt")) {
+        File file(InternalFS);
+        if (!file.open("/pending.txt", FILE_O_READ)) {
+            return false; // can't verify — keep the file and retry
+        }
+        uint32_t size = file.size();
+        file.close();
+
+        if (drainOffset_ > size) {
+            // Cursor sits past the end: the file changed under us. Replay it
+            // from the start rather than delete readings that may never have
+            // been sent. Duplicates are visible in the app; losses are not.
+            beginDrain();
+            return false;
+        }
+        if (drainOffset_ < size) {
+            return false; // undelivered lines remain — nothing to clear yet
+        }
+        InternalFS.remove("/pending.txt");
+    }
+
+    // NB: pendingBufCount_ is deliberately untouched. Readings taken since the
+    // drain started live there and have not been delivered; zeroing it here
+    // would throw away exactly what this rewrite exists to protect.
+    drainOffset_ = 0;
+    drainNextOffset_ = 0;
+    drainPeeked_ = false;
+    drainSource_ = DrainSource::NONE;
+    drainPending_ = false;
     return true;
 }
 
 bool ConfigManager::clearPendingReadings() {
     pendingBufCount_ = 0;
+    drainOffset_ = 0;
+    drainNextOffset_ = 0;
+    drainPeeked_ = false;
+    drainSource_ = DrainSource::NONE;
+    drainPending_ = false;
     if (!mounted_) {
         return false;
     }

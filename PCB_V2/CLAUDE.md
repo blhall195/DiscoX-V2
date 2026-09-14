@@ -84,7 +84,7 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 
 | Seam | V1 | V2 |
 |------|----|----|
-| BLE | UART bridge to DiscoX (`ble_manager` on SERCOM1) | `src/ble_manager.cpp` wraps `src/drivers/sap6_ble.*` in-process; same `BleCommand` dispatch in `pollBLECommands()`. Connection monitor + Coded-PHY dance live in `BleManager::update()` |
+| BLE | UART bridge to DiscoX (`ble_manager` on SERCOM1) | `src/ble_manager.cpp` wraps `src/drivers/sap6_ble.*` in-process; same `BleCommand` dispatch in `pollBLECommands()`. Connection monitor + Coded-PHY dance live in `BleManager::update()`. Outbound legs go through the delivery drain — see "Reading delivery" below |
 | Accelerometer | ISM330DHCX (I2C, accel+gyro, m/s²) | SCA3300 (SPI on dedicated `SPIClass(NRF_SPIM2, …)`, MODE_1 ±3 g, reports g → ×9.80665 at the read sites). **No gyro**: motion for the adaptive EMA + display freeze is derived from accel-vs-EMA deviation (`ACCEL_MOTION_THRESHOLD` in main.cpp — tune on hardware) |
 | Laser | Egismos @ 9600 (`laser_egismos`) | Meskernel LDJ-100RED @ 115200: `src/laser_manager.cpp` presents the old `LaserError` surface over `drivers/ldj100`. Beeps are no longer the laser's job — **all UI sounds live in `src/sounds.cpp`** (per-event vocabulary: shot click, loud 4 kHz reading bleep, rising leg-complete fanfare, falling error womp; power on/off is deliberately silent) over `drivers/buzzer` (`tone` + `sweep` primitives, blocking bit-bang, piezo loudest at its 4 kHz resonance). `LaserManager::setBuzzer(true)` survives as a V1-compat shim (→ `Sounds::click()`) for calibration_mode; `setBuzzer(false)` = no-op |
 | Storage | QSPI flash + FAT (SdFat) + USB-MSC drive mode | **Internal flash + LittleFS** (`InternalFileSystem`). Same file set: `/config.json`, `/calibration.{bin,json}`, `/cal_metrics.bin`, `/pending.txt`, `/flags/*`. USB drive mode is **back** (2026-07-09) via a 128 KB FAT12 partition carved out of internal flash — see "USB drive mode" section. Firmware update still via UF2 bootloader (double-tap-reset magic, see Gotchas), storage recovery via menu → Settings → Reformat Storage |
@@ -149,6 +149,47 @@ core's SoftDevice-safe `flash_nrf5x` HAL (same one LittleFS uses) — its
 single 4 KB page cache is shared, which is why host access is gated
 (`setHostAccess`) and exit waits 500 ms before importing: MSC callbacks run
 on the USB task and must never interleave with loop-task filesystem writes.
+
+## Reading delivery (2026-09-14)
+
+**Invariant: a reading is only removed from storage once the phone has ACKed
+it.** Nothing else in the firmware may delete a pending reading on the strength
+of having sent it.
+
+Every measurement goes to `configMgr.appendPendingReading()` — there is no
+longer a connected/disconnected fork in `handleMeasurementSuccess()`. The
+pending store is the *only* send queue: `pollBLEDrain()` (main.cpp) hands SAP6
+one leg at a time and advances the delivery cursor only after
+`ble.pendingReadings() == 0`, which means queued *and* in-flight are both clear.
+
+The cursor (`drainOffset_` in config_manager) is the byte offset of the oldest
+undelivered line in `/pending.txt`; the cycle is `peekOldestPending()` → send →
+(ACK) → `commitOldestPending()`, and the file is deleted by
+`clearDeliveredPending()` only after the cursor is *verified* to have reached
+EOF. It is RAM-only on purpose: a reboot mid-drain replays delivered legs rather
+than risking undelivered ones — a duplicate is visible in the survey app, a
+missing leg is not.
+
+What this replaced, and why none of it should come back:
+
+- Readings taken **while connected** were never persisted at all. The leg lived
+  only in SAP6's RAM queue, so a dropout before the ACK lost it silently while
+  the device showed it as sent. This was the field bug: readings taken, shown on
+  the device, never arriving in SexyTopo.
+- Reconnect ran a **blocking** flush that queued the whole file in one pass.
+  Past the 20-slot queue the surplus was dropped with no error, ACKs could not
+  be processed (the loop was blocked, so only one leg actually went out), and
+  `/pending.txt` was then deleted regardless.
+- `notify()`'s return was ignored, so a refused send (phone not re-subscribed
+  yet) armed the 5 s ACK timer as though it had worked.
+
+`ble.sendSurveyData()` now has exactly one caller, `pollBLEDrain()`. Keep it
+that way — a second sender reintroduces the "sent but unrecorded" window.
+
+Degraded path: if the RAM buffer cannot reach flash (unmounted, or the zombie
+filesystem that mounts and reads but refuses every commit), the drain serves
+readings straight from RAM rather than stranding them. That path is reachable
+only when `syncPendingToFlash()` fails.
 
 ## Gotchas (inherited + new)
 
@@ -279,7 +320,10 @@ on the USB task and must never interleave with loop-task filesystem writes.
    off known poses); `s` toggles the `>azimuth`/`>inclination` teleplot
    stream; `c` dumps the stored `/config.json`; `f` resets filter tuning
    (EMA alphas + stability buffer) to firmware defaults and saves — needed
-   because a stored config.json otherwise shadows new defaults forever.
+   because a stored config.json otherwise shadows new defaults forever;
+   `p` prints delivery status (undelivered count, in-flight flag, SAP6
+   sent/acked/resend/failed-send counters) — the view for verifying the
+   reading drain on the bench.
    Note the axes strings are ALSO stored inside saved calibrations
    (`/calibration.{bin,json}`) — they override config.h at load. Boot serial
    prints `Mag axes:`/`Grav axes:` showing what was actually loaded; if a
@@ -309,7 +353,16 @@ on the USB task and must never interleave with loop-task filesystem writes.
    display freeze/anchor clamp removed in favour of a plain 0.10° deadband
    (`updateDisplay`, main.cpp). Confirm underground with real survey legs.
 4. BLE needs a phone run (SexyTopo / nRF Connect): 17-byte legs, ACK/seq
-   bit, commands, Coded PHY on Android (iOS = 1 Mbps, normal).
+   bit, commands, Coded PHY on Android (iOS = 1 Mbps, normal). Since
+   2026-09-14 this must also prove the delivery drain (see "Reading
+   delivery"), none of which has run on hardware yet:
+   - a leg taken while connected, with the phone force-dropped before it
+     ACKs, survives and arrives on reconnect;
+   - a backlog well over 20 legs drains completely (the old flush silently
+     dropped everything past 20);
+   - `p` on serial shows undelivered reaching 0 and `/pending.txt` gone;
+   - dropping the link while sitting in the **menu** still lets the phone
+     find the device again (advertising restart used to be skipped there).
 5. SCA3300 runs in MODE_1 (±3 g) so disco shake detection (11 m/s²) doesn't
    clip; revisit MODE_4 (low noise) if shake detection is retired.
 6. ~~USB drive mode hardware test~~ **done 2026-07-10** — exercised on
@@ -318,6 +371,15 @@ on the USB task and must never interleave with loop-task filesystem writes.
 
 ## Status
 
+- 2026-09-14: **reading delivery reworked so no leg can be lost to a dropout**
+  (see "Reading delivery"). Readings taken while connected were never
+  persisted; the reconnect flush dropped everything past 20 queued legs and
+  deleted `/pending.txt` before any ACK. Also fixed: advertising was never
+  restarted after a disconnect in menu or snake mode (device invisible until
+  you exited), bonds were wiped on every disconnect rather than once per
+  power-on, and a refused `notify()` was counted as a send. Builds clean
+  (RAM 15.9%, flash 62.5%); host tests pass. **Not yet run on hardware** —
+  commissioning item #4.
 - 2026-07-07: initial merge complete — builds clean (RAM 8.7%, flash 45.2%).
 - 2026-07-07: **first hardware bring-up of the merged firmware PASSED the core
   spine.** Flashed via USB DFU; serial shows the loop running with live,

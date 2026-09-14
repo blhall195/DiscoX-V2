@@ -102,7 +102,8 @@ int SAP6Protocol::pollIn() {
     }
 }
 
-// pollOut — exact port of caveble.py _poll_out() (lines 106-118)
+// pollOut — port of caveble.py _poll_out() (lines 106-118), plus a check on
+// notify()'s return that the Python original has no equivalent of.
 void SAP6Protocol::pollOut() {
     if (_waitingForAck) {
         // Resend if no ACK within timeout
@@ -111,25 +112,49 @@ void SAP6Protocol::pollOut() {
             _lastSendTime = millis();
             _resendCount++;
         }
-    } else if (_queueCount > 0) {
-        // Dequeue next reading
-        LegReading &r = _queue[_queueHead];
-        _queueHead = (_queueHead + 1) % SAP6_SEND_QUEUE_MAX;
-        _queueCount--;
-
-        // Pack:  <Bffff  — little-endian on Cortex-M4 = native byte order
-        _currentPacket[0] = _lastSentBit;
-        memcpy(&_currentPacket[1], &r.azimuth, 4);
-        memcpy(&_currentPacket[5], &r.inclination, 4);
-        memcpy(&_currentPacket[9], &r.roll, 4);
-        memcpy(&_currentPacket[13], &r.distance, 4);
-
-        _legDataChar.write(_currentPacket, sizeof(_currentPacket));
-        _legDataChar.notify(_currentPacket, sizeof(_currentPacket));
-
-        _lastSentBit ^= 1; // toggle AFTER sending (caveble.py:116)
-        _lastSendTime = millis();
-        _waitingForAck = true;
-        _sentCount++;
+        return;
     }
+
+    if (_queueCount == 0) {
+        return;
+    }
+
+    // Back off briefly after a refused notify. The usual cause is the phone
+    // not having re-subscribed to the leg characteristic yet, which clears in
+    // well under a second — far quicker than the 5 s ACK timeout.
+    if (_sendFailed && millis() - _lastSendTime < SAP6_SEND_RETRY_MS) {
+        return;
+    }
+
+    // Pack from the head WITHOUT dequeuing: the reading is only consumed once
+    // the stack has actually accepted the packet.
+    LegReading &r = _queue[_queueHead];
+
+    // Pack:  <Bffff  — little-endian on Cortex-M4 = native byte order
+    _currentPacket[0] = _lastSentBit;
+    memcpy(&_currentPacket[1], &r.azimuth, 4);
+    memcpy(&_currentPacket[5], &r.inclination, 4);
+    memcpy(&_currentPacket[9], &r.roll, 4);
+    memcpy(&_currentPacket[13], &r.distance, 4);
+
+    _legDataChar.write(_currentPacket, sizeof(_currentPacket));
+    if (!_legDataChar.notify(_currentPacket, sizeof(_currentPacket))) {
+        // Not subscribed, no connection, or TX buffers full. Leave the reading
+        // queued and the sequence bit untouched, and do NOT arm the ACK timer:
+        // counting a refused send as in-flight cost a guaranteed 5 s stall and
+        // made the caller believe the leg was on its way.
+        _sendFailed = true;
+        _lastSendTime = millis();
+        _failedSendCount++;
+        return;
+    }
+
+    _queueHead = (_queueHead + 1) % SAP6_SEND_QUEUE_MAX;
+    _queueCount--;
+    _sendFailed = false;
+
+    _lastSentBit ^= 1; // toggle AFTER sending (caveble.py:116)
+    _lastSendTime = millis();
+    _waitingForAck = true;
+    _sentCount++;
 }

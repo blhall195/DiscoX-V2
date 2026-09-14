@@ -190,6 +190,10 @@ static void dismissErrorScreen() {
 
 // ── BLE state ───────────────────────────────────────────────────────
 static bool lastBleConnected = false;
+// True while one leg sits with SAP6 awaiting the phone's ACK. Deliberately
+// survives a dropout: the resend happens on reconnect and the commit follows
+// the ACK, so the reading is never struck off on the strength of a send alone.
+static bool drainInFlight = false;
 
 // ── Power button (LTC2954 INT) edge detection ───────────────────────
 // INT pulses LOW (<1 s) per press — edge-triggered with a 20 ms confirm.
@@ -216,6 +220,8 @@ static void pollButtons(uint32_t now);
 static void pollMeasurement(uint32_t now);
 static void pollBLEPin(uint32_t now);
 static void pollBLECommands(uint32_t now);
+static void pollBLEDrain(uint32_t now);
+static void pumpBleInMode();
 static void pollBattery(uint32_t now);
 static void checkAutoShutoff(uint32_t now);
 static void checkLaserTimeout(uint32_t now);
@@ -230,7 +236,6 @@ static void resetLaser();
 static void doShutdown();
 static void enterUsbDriveMode(); // modal USB MSC settings drive — reboots on exit
 static void storageFactoryReset(); // boot combo DOWN+MENU — resets if confirmed
-static void onFlushReading(float az, float inc, float dist);
 
 const bool REGULAR_SHOT = false;
 const bool QUICK_SHOT = true;
@@ -611,6 +616,7 @@ void loop() {
 
     // ── Snake mode: SnakeGame owns the loop ──
     if (snakeGame.isActive()) {
+        pumpBleInMode();
         if (snakeGame.update()) {
             // Game finished — return to normal operation
             Serial.println(F("Snake game ended — returning to normal mode"));
@@ -625,6 +631,7 @@ void loop() {
 
     // ── Menu mode: hand off to MenuManager, skip everything else ──
     if (menuMgr.isActive()) {
+        pumpBleInMode();
         menuMgr.update(buttons);
         delay(Timing::LOOP_INTERVAL_MS);
         return;
@@ -842,6 +849,7 @@ void loop() {
     pollMeasurement(now);
     pollBLEPin(now);
     pollBLECommands(now);
+    pollBLEDrain(now);
     pollBattery(now);
     checkAutoShutoff(now);
     checkLaserTimeout(now);
@@ -1028,6 +1036,28 @@ static void readSensorsUpdate(uint32_t now) {
                 display.updateDistanceText("BTN?");
                 display.refresh();
             }
+        } else if (c == 'p' || c == 'P') {
+            // Delivery status — the view needed to verify the reading drain on
+            // the bench (commissioning item #4). "undelivered" counts only
+            // readings the phone has not ACKed; failed = notify() refusals.
+            Serial.print(F("BLE conn="));
+            Serial.print(ctx.bleConnected);
+            Serial.print(F(" undelivered="));
+            Serial.print(configMgr.countPendingReadings());
+            Serial.print(F(" inRam="));
+            Serial.print(configMgr.hasPendingToSync());
+            Serial.print(F(" inFlight="));
+            Serial.print(drainInFlight);
+            Serial.print(F(" | sap6 queued="));
+            Serial.print(sap6.pending());
+            Serial.print(F(" sent="));
+            Serial.print(sap6.sentCount());
+            Serial.print(F(" acked="));
+            Serial.print(sap6.ackedCount());
+            Serial.print(F(" resends="));
+            Serial.print(sap6.resendCount());
+            Serial.print(F(" failedSends="));
+            Serial.println(sap6.failedSendCount());
         } else if (c == 'c' || c == 'C') {
             Serial.println(F("--- /config.json ---"));
             if (!configMgr.printConfig(Serial)) {
@@ -1599,20 +1629,16 @@ static void handleMeasurementSuccess() {
     Serial.flush();
     delay(50);
 
-    // Send via BLE or queue
-    if (ctx.bleConnected && bleOk) {
-        Serial.println(F("  HS:2a ble send"));
-        Serial.flush();
-        delay(50);
-        ble.sendSurveyData(ctx.readings.azimuth, ctx.readings.inclination, ctx.readings.distance);
-        ctx.bleDisconnectionCounter = 0;
-    } else {
-        ctx.bleDisconnectionCounter++;
-        if (dispOk) {
-            display.updateBTNumber(ctx.bleDisconnectionCounter);
-        }
-        // Buffer reading in RAM — synced to flash during IDLE or shutdown
-        configMgr.appendPendingReading(ctx.readings.azimuth, ctx.readings.inclination, ctx.readings.distance);
+    // Every reading takes the same path whether or not the phone is there:
+    // buffer it in RAM (synced to flash during IDLE or shutdown), and let
+    // pollBLEDrain() hand it over and strike it off only once the phone has
+    // ACKed it. Sending straight from RAM while connected was the data-loss
+    // bug — the leg existed nowhere else, so a dropout before the ACK lost it
+    // silently while the device showed it as sent.
+    configMgr.appendPendingReading(ctx.readings.azimuth, ctx.readings.inclination, ctx.readings.distance);
+    ctx.bleDisconnectionCounter++;
+    if (dispOk) {
+        display.updateBTNumber(ctx.bleDisconnectionCounter);
     }
 
     // ── Leg consistency buffer (skip for quick shots) ─────────
@@ -1715,48 +1741,102 @@ static void pollBLEPin(uint32_t now) {
     ctx.bleConnected = connected;
 
     // Transition: disconnected → connected
+    // No flush-on-connect branch any more: pollBLEDrain() picks the backlog up
+    // on its own the moment the link is usable. The old version queued the
+    // whole file in one blocking pass — past the 20-slot queue the surplus was
+    // dropped on the floor, and /pending.txt was deleted before a single ACK.
     if (connected && !lastBleConnected) {
         Serial.println(F("BLE: connected"));
-
-        // Flush pending readings if any
-        if (ctx.bleDisconnectionCounter > 0 && flashOk) {
-            disco.setBlue();
-            if (dispOk) {
-                display.updateBTNumber(ctx.bleDisconnectionCounter);
-                display.refresh();
-            }
-            delay(1000); // let BLE slave be ready
-
-            configMgr.flushPendingReadings(onFlushReading);
-            configMgr.clearPendingReadings();
-
-            ctx.bleDisconnectionCounter = 0;
-            ctx.bleReadingsTransferredFlag = false;
-            disco.turnOff();
-            Serial.println(F("BLE: pending readings flushed"));
-        }
     }
 
     if (!connected && lastBleConnected) {
         Serial.println(F("BLE: disconnected"));
     }
 
-    // Update display
+    // The counter is the honest undelivered count now, so show it in both
+    // states: while connected it ticks down as the backlog drains.
     if (dispOk) {
         display.updateBTLabel(connected);
-        if (connected) {
-            if (ctx.bleReadingsTransferredFlag) {
-                display.updateBTNumber(0);
-                ctx.bleDisconnectionCounter = 0;
-            } else {
-                display.updateBTNumber(0);
-            }
-        } else {
-            display.updateBTNumber(ctx.bleDisconnectionCounter);
-        }
+        display.updateBTNumber(ctx.bleDisconnectionCounter);
     }
 
     lastBleConnected = connected;
+}
+
+// ── Outbound reading drain ──────────────────────────────────────
+// The pending store is the only send queue. One leg is handed to SAP6 at a
+// time and removed from flash only once the phone has acknowledged it, so a
+// dropout at any point costs a retransmission rather than the reading.
+//
+// ble.pendingReadings() is sap6.pending(), i.e. queued + in-flight-unacked.
+// Zero means everything handed over has been ACKed, which is the single
+// synchronisation point between the radio and the store — there is no second
+// set of books to drift out of step with it.
+static void pollBLEDrain(uint32_t now) {
+    (void)now;
+
+    if (!bleOk || !ctx.bleConnected) {
+        return;
+    }
+    if (!configMgr.hasUndelivered()) {
+        return; // cheap RAM check: no flash I/O on an idle device
+    }
+
+    // Get the RAM buffer onto flash first so the file is the single ordered
+    // source and "oldest" is unambiguous.
+    if (configMgr.hasPendingToSync()) {
+        if (ctx.currentState != SystemState::IDLE) {
+            return; // never write flash mid-measurement (see CLAUDE.md)
+        }
+        if (flashOk && configMgr.syncPendingToFlash()) {
+            return; // safely on flash — drain it from there next tick
+        }
+        // Storage is unmounted or refusing commits. Don't strand the readings:
+        // fall through and let peekOldestPending() serve them out of RAM.
+    }
+    if (ble.pendingReadings() != 0) {
+        return; // previous leg still unacknowledged
+    }
+
+    // Reaching here with a leg outstanding means the phone ACKed it.
+    if (drainInFlight) {
+        if (configMgr.commitOldestPending() && ctx.bleDisconnectionCounter > 0) {
+            ctx.bleDisconnectionCounter--;
+        }
+        drainInFlight = false;
+    }
+
+    float az, inc, dist;
+    if (configMgr.peekOldestPending(az, inc, dist)) {
+        ble.sendSurveyData(az, inc, dist);
+        drainInFlight = true;
+    } else if (configMgr.clearDeliveredPending()) {
+        // Every line delivered — now, and only now, the file can go.
+        Serial.println(F("BLE: pending readings delivered"));
+    }
+}
+
+// ── Keep the link serviced while a mode owns the loop ────────────
+// Advertising stops when a connection is established and restartOnDisconnect
+// is false, so the ONLY thing that resumes it after a dropout is
+// pollConnection() inside ble.update(). Without this the menu and snake
+// short-circuits left the device silently unadvertised — walk out of range
+// with the menu open and nothing could find it again until you exited.
+//
+// Commands are read and discarded: acting on a TAKE_SHOT or START_CAL from
+// inside the menu would be wrong, and leaving one in the single-slot inbox
+// would fire it on exit. ACK handling is internal to SAP6, so the drain keeps
+// its bookkeeping either way.
+//
+// Calibration mode is deliberately excluded — it quiesces the radio for flash
+// safety (bleRadioQuiet) and restores it on exit; pumping there would have
+// pollConnection() undo that on the first dropout.
+static void pumpBleInMode() {
+    if (!bleOk) {
+        return;
+    }
+    ble.update();
+    (void)ble.readCommand();
 }
 
 // ── BLE UART command processing ─────────────────────────────────
@@ -1780,7 +1860,8 @@ static void pollBLECommands(uint32_t now) {
 
     switch (cmd) {
     case BleCommand::ACK_RECEIVED:
-        ctx.bleReadingsTransferredFlag = true;
+        // Delivery accounting lives in pollBLEDrain(), which reads it off
+        // sap6.pending() rather than a flag that could be missed.
         break;
 
     case BleCommand::TAKE_SHOT:
@@ -2217,17 +2298,6 @@ static void enterUsbDriveMode() {
     // Does not return
 }
 
-static void onFlushReading(float az, float inc, float dist) {
-    Serial.print(F("FLUSH: az="));
-    Serial.print(az, 1);
-    Serial.print(F(" inc="));
-    Serial.print(inc, 1);
-    Serial.print(F(" dist="));
-    Serial.println(dist, 2);
-    ble.sendSurveyData(az, inc, dist);
-    delay(50); // pacing between BLE sends
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // ── Initialization Functions (unchanged from previous sessions) ───
 // ═══════════════════════════════════════════════════════════════════
@@ -2365,6 +2435,7 @@ static void initFlash() {
             Serial.print(F("  Pending readings: "));
             Serial.println(pending);
             ctx.bleDisconnectionCounter = pending;
+            configMgr.beginDrain();
         }
 
         if (configMgr.hasFlag(Flags::CALIBRATION)) {
