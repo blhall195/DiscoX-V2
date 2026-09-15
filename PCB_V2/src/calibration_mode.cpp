@@ -218,12 +218,12 @@ void CalibrationMode::updateCollecting() {
         disco_->setRed();
     }
 
-    // DOWN (B3, as shown on screen) or MENU (B4) undoes the last recorded
-    // point. Read both edges unconditionally — wasPressed() consumes the
-    // flag, so short-circuiting would leave a stale edge to fire later.
-    bool undoDown = btns_->wasPressed(Button::DOWN);
-    bool undoMenu = btns_->wasPressed(Button::MENU);
-    bool undoPressed = undoDown || undoMenu;
+    // DOWN (as shown on screen) undoes the last recorded point. MENU is
+    // deliberately inert while collecting — but still consume its edge:
+    // wasPressed() clears the flag, and leaving it set would let the press
+    // fire later, once calibration hands control back to the menu.
+    bool undoPressed = btns_->wasPressed(Button::DOWN);
+    (void)btns_->wasPressed(Button::MENU);
 
     if (undoPressed && waitingForStable_) {
         // Mid-capture: cancel the attempt (otherwise the 4 s stability
@@ -662,7 +662,7 @@ void CalibrationMode::showEllipsoidScreen() {
     // Instructions
     d.setTextSize(1);
     d.setCursor(0, 68);
-    d.print(F("B1:record  B3:undo"));
+    d.print(F("FIRE:record DOWN:undo"));
 
     // Coverage bar
     showCoverageBar();
@@ -749,7 +749,7 @@ void CalibrationMode::showAlignmentProgress() {
     // Instructions
     d.setTextSize(1);
     d.setCursor(0, 100);
-    d.print(F("B1:record  B3:undo"));
+    d.print(F("FIRE:record DOWN:undo"));
 
     d.display();
 }
@@ -1417,9 +1417,9 @@ void CalibrationMode::showFBLiveScreen() {
     if (fbTakingShot_) {
         d.println(F("Hold steady..."));
     } else if (fbCount_ >= 2 && !fbHasForesight_) {
-        d.println(F("B1:shoot  B2:finish"));
+        d.println(F("FIRE:shoot  UP:finish"));
     } else {
-        d.println(F("Press B1 to shoot"));
+        d.println(F("Press FIRE to shoot"));
     }
 
     d.display();
