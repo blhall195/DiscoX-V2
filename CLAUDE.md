@@ -20,6 +20,42 @@ module that replaces both V1 MCUs. Two folders:
   per-IC verification status and the pattern for adding IC tests. Come back
   here to isolate a suspected hardware fault to one IC.
 
+## Releasing — the release notes are customer-facing copy
+
+Pushing a tag runs `.github/workflows/build.yml`: native tests, `./build.sh`,
+then a GitHub release carrying `mrzappy-<tag>.uf2`. It then runs
+`tools/publish_to_website.py`, which opens a pull request on
+[blhall195/DiscoX-Cave-Survey-Device](https://github.com/blhall195/DiscoX-Cave-Survey-Device)
+adding the new `.uf2`, rewriting the four version strings on `firmware.html`,
+and **building the site's changelog from the release notes body**. Brendan
+reviews that PR and merges; merging it deploys discox.co.uk.
+
+So when you tag, **write the release notes for cavers, not for git**. Top-level
+`-` bullets become the `<li>` items on the public firmware page. Say what was
+wrong, what it meant in the field, and whether the user has to do anything
+(re-flash, re-calibrate). The v2.0.2 entry on `firmware.html` is the standard.
+
+`generate_release_notes: true` is still on as a backstop, but its output is a
+list of commit titles. The script **detects that and refuses to publish it** —
+you get the download links updated and an explicit warning on the PR that the
+changelog was left alone, rather than commit messages appearing on the website.
+
+Write the notes on the release before the workflow's "Read the release notes"
+step runs, or edit the release afterwards and re-run the job.
+
+The cross-repo PR needs the `WEBSITE_PR_TOKEN` secret (a fine-grained PAT scoped
+to the website repo only, Contents + Pull requests write). Without it the
+release still publishes and the workflow logs a warning.
+
+Dry-run the script before changing it — it needs no token and writes nothing:
+
+    python3 tools/publish_to_website.py --tag v2.0.2 --dry-run \
+        --website-dir ../DiscoX-Cave-Survey-Device
+
+Against an already-published tag that must print `4/4 version strings located`
+and **no diff**: the script reproducing the live page byte-for-byte is the test
+that its regexes still match the markup.
+
 ## V1 Reference Implementation
 
 V1 is a dual-MCU architecture (SAMD51 main board + nRF52840 BLE board

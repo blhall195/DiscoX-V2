@@ -58,3 +58,37 @@ jobs:
         with:
           files: build/mrzappy-${{ github.ref_name }}.uf2
           generate_release_notes: true
+
+      # The release body is what the website's changelog is built from, so it is
+      # read here with the workflow's own token -- WEBSITE_PR_TOKEN below is
+      # scoped to the website repo and cannot see this repo's releases.
+      - name: Read the release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" \
+             --repo "${{ github.repository }}" --json body -q .body \
+             > "${RUNNER_TEMP}/release-notes.md"
+
+      # Open a PR on discox.co.uk with the new .uf2, the version strings and the
+      # changelog. Brendan merges it; merging that repo's main is the deploy.
+      #
+      # WEBSITE_PR_TOKEN is a fine-grained PAT scoped to
+      # blhall195/DiscoX-Cave-Survey-Device ONLY, with Contents: write and
+      # Pull requests: write. It deliberately cannot touch this repo. If it is
+      # missing or expired the release still publishes -- the website just lags,
+      # and `publish-firmware` in the website repo is the manual catch-up.
+      - name: Open the website pull request
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_PR_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::WEBSITE_PR_TOKEN is not set -- discox.co.uk was not updated."
+            exit 0
+          fi
+          python3 tools/publish_to_website.py \
+            --tag "${{ github.ref_name }}" \
+            --uf2 "build/mrzappy-${{ github.ref_name }}.uf2" \
+            --notes "${RUNNER_TEMP}/release-notes.md"
