@@ -49,12 +49,33 @@ DEFAULT_KEEP = 2
 V2_UF2 = re.compile(r"^mrzappy-v.+\.uf2$")
 
 
+# Supplies the token to git WITHOUT it appearing in argv, in .git/config, or in
+# any error message. Git runs the helper through sh, which expands $GH_TOKEN from
+# the inherited environment at that point -- the string below is what git sees,
+# and it is what would be printed if anything went wrong. The leading empty
+# helper clears any helper inherited from the user's gitconfig.
+#
+# The obvious alternative, cloning https://x-access-token:$TOKEN@github.com/...,
+# puts the live token in argv. subprocess.CalledProcessError stringifies argv, so
+# a failed clone prints the token in the traceback. GitHub Actions would mask it,
+# but that is one layer of luck rather than a property of the script, and it is
+# absent entirely when this is run by hand.
+GIT_CRED = ["-c", "credential.helper=",
+            "-c", 'credential.helper=!f() { echo username=x-access-token; '
+                  'echo "password=$GH_TOKEN"; }; f']
+
+
 def run(cmd, cwd=None, capture=False, check=True, env=None):
-    """Run a command. Never logs `cmd` on failure -- it can carry a token."""
-    return subprocess.run(
-        cmd, cwd=cwd, check=check, env=env, text=True,
-        stdout=subprocess.PIPE if capture else None,
-    )
+    """Run a command, re-raising failures without echoing argv."""
+    try:
+        return subprocess.run(
+            cmd, cwd=cwd, check=check, env=env, text=True,
+            stdout=subprocess.PIPE if capture else None,
+        )
+    except subprocess.CalledProcessError as e:
+        # Defence in depth: nothing should carry a secret in argv any more, but
+        # the default message is the whole command line, so do not let it out.
+        raise subprocess.CalledProcessError(e.returncode, cmd[0]) from None
 
 
 def fail(msg):
@@ -277,16 +298,14 @@ def main():
     else:
         if args.dry_run:
             fail("--dry-run needs --website-dir; it will not clone")
-        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-        if not token:
+        if not os.environ.get("GH_TOKEN"):
             fail("GH_TOKEN is not set -- needed to clone and push the website repo")
         tmp = tempfile.mkdtemp(prefix="discox-website-")
         website = Path(tmp) / "website"
         print(f"==> cloning {args.website_repo}")
-        # The token is built here and never printed; run() does not echo argv.
-        run(["git", "clone", "--depth", "1",
-             f"https://x-access-token:{token}@github.com/{args.website_repo}.git",
-             str(website)])
+        # Plain URL: the token reaches git through GIT_CRED, from the environment.
+        run(["git", *GIT_CRED, "clone", "--depth", "1",
+             f"https://github.com/{args.website_repo}.git", str(website)])
 
     # --- the binary -------------------------------------------------------
     if args.uf2:
@@ -366,7 +385,8 @@ def main():
 
     run(["git", "-C", str(website), "commit", "-m",
          f"Publish {tag} firmware"])
-    run(["git", "-C", str(website), "push", "--force", "origin", branch])
+    run(["git", "-C", str(website), *GIT_CRED,
+         "push", "--force", "origin", branch])
 
     warn = "" if inserted else (
         "\n> **The changelog was not updated.** The release notes for this tag "
