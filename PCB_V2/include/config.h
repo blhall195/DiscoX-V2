@@ -52,13 +52,27 @@ constexpr uint8_t SH1107_HEIGHT = 128;
 constexpr uint8_t NEOPIXEL_COUNT = 1;
 
 // ── Calibration axis mappings ───────────────────────────────────────
-// V2 values determined empirically 2026-07-10 from raw-axis snapshots in
-// three known poses (level / laser down / rolled 90°): device X (right) =
-// +rawY, Y (laser) = -rawX, Z (up) = ±rawZ. Verified consistent across both
-// sensors and all poses. Full on-device calibration (56-pt ellipsoid +
-// 24-pt alignment + F/B check) still required.
+// Raw sensor axes → device frame (X = right, Y = laser/forward, Z = up).
+// GRAV_AXES maps to the *gravity* vector (pointing down), not to the
+// accelerometer's raw specific force, which reads +1 g along whichever axis
+// points up — so the gravity string is the negation of the chip's physical
+// mounting, not a copy of it.
+//
+// First measured empirically 2026-07-10 from raw-axis snapshots in three
+// poses (level / laser down / rolled 90°). That pass read each axis off in
+// isolation and got GRAV_AXES = "+Y-X-Z", which puts the accelerometer's
+// frame 180° rolled relative to the magnetometer's: the up vector the two
+// sensors agree on is inverted, and the orientation matrix comes out
+// mirrored. Symptom (2026-09-19): turn the device from north towards the
+// east and the azimuth runs backwards, 90° reading as 270°; inclination
+// stays correct because it comes from gravity alone. Corrected to
+// "-Y-X+Z" — a 180° roll of the gravity vector about the laser axis —
+// which reproduces azimuth and inclination exactly at every attitude.
+//
+// Full on-device calibration (56-pt ellipsoid + 24-pt alignment + F/B
+// check) is still required; these strings only fix the frame.
 constexpr char MAG_AXES[] = "+Y-X+Z";
-constexpr char GRAV_AXES[] = "+Y-X-Z";
+constexpr char GRAV_AXES[] = "-Y-X+Z";
 
 // ── System power-off hook ───────────────────────────────────────────
 // Defined in main.cpp: syncs pending data, then drives KILL LOW via

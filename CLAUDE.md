@@ -59,9 +59,13 @@ Same math in V1 and V2. Ported from Python; uses Eigen for linear algebra.
   solved via least-squares, back-projected to adjust `mag.centre_`. Menu → Enter Calibration →
   Field Check (F/B).
 
-Note: V2 axis mappings determined empirically 2026-07-10 (mag `"+Y-X+Z"`, accel `"+Y-X-Z"` —
-raw-axis snapshots in three poses, see `PCB_V2/CLAUDE.md`); full on-device V2 calibration is
-still pending, so the embedded V1 transform/centre data remains only roughly valid.
+Note: V2 axis mappings determined empirically 2026-07-10 (mag `"+Y-X+Z"`, grav `"+Y-X-Z"` —
+raw-axis snapshots in three poses, see `PCB_V2/CLAUDE.md`). The grav string was corrected to
+`"-Y-X+Z"` on 2026-09-19: `GRAV_AXES` maps to gravity (down), not to the accelerometer's raw
+specific force, and reading each axis off in isolation left the accel frame 180° rolled
+relative to the mag — which mirrored the azimuth (east read 270°) while leaving inclination
+right. Full on-device V2 calibration is still pending, so the embedded V1 transform/centre
+data remains only roughly valid.
 
 ## SAP6 BLE GATT Protocol
 

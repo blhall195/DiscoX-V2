@@ -81,6 +81,13 @@ class Sensor {
 
     bool isCalibrated() const { return calibrated_; }
     const Axes &axes() const { return axes_; }
+
+    /// Replace the axis mapping, keeping transform/centre/RBFs. The mapping
+    /// describes how the chip is mounted, so it belongs to the board rather
+    /// than to a calibration run — the firmware's compiled-in string wins
+    /// over one deserialised from flash.
+    void setAxes(const char *axesStr) { axes_ = Axes(axesStr); }
+
     const Eigen::Matrix3f &transform() const { return transform_; }
     Eigen::Matrix3f &transformRef() { return transform_; }
     const Eigen::Vector3f &centre() const { return centre_; }

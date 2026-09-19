@@ -33,9 +33,12 @@
 // ── Embedded calibration data ──────────────────────────────────────
 // From V1's calibration_dict.json (github.com/blhall195/Mr_Zappy) —
 // loaded at startup.
-// Axes updated to the V2 mappings (2026-07-10, see config.h); the
-// transform/centre/rbf data is still V1's and only roughly valid — expect
-// MagErr until a full V2 on-device calibration replaces this fallback.
+// Axes updated to the V2 mappings (2026-07-10, grav corrected 2026-09-19 —
+// see config.h); the transform/centre/rbf data is still V1's and only
+// roughly valid — expect MagErr until a full V2 on-device calibration
+// replaces this fallback. loadCalibration() re-applies the config.h strings
+// on top of whatever is loaded, so these two only have to stay in step for
+// readability.
 static const char CALIBRATION_JSON[] PROGMEM = R"({
   "mag": {
     "axes": "+Y-X+Z",
@@ -51,7 +54,7 @@ static const char CALIBRATION_JSON[] PROGMEM = R"({
   },
   "dip_avg": 68.9221,
   "grav": {
-    "axes": "+Y-X-Z",
+    "axes": "-Y-X+Z",
     "transform": [[0.101936, -0.00167875, 0.000143624],
                    [0.0015862, 0.10164, 0.000604115],
                    [0.000153489, -0.000228592, 0.102199]],
@@ -2547,6 +2550,24 @@ static void initCalibration() {
     calOk = loaded;
 
     if (calOk) {
+        // The axis strings travel inside saved calibrations, so a file
+        // written before a mapping was corrected would otherwise shadow
+        // config.h forever (the 2026-09-19 mirrored-azimuth fix). The
+        // mapping describes the board, not the calibration run — take it
+        // from the firmware and say so when the file disagreed.
+        bool magAxesStale = strcmp(calibration.mag().axes().toString(), MAG_AXES) != 0;
+        bool gravAxesStale = strcmp(calibration.grav().axes().toString(), GRAV_AXES) != 0;
+        if (magAxesStale || gravAxesStale) {
+            Serial.print(F("  Axes in file ("));
+            Serial.print(calibration.mag().axes().toString());
+            Serial.print(F(" / "));
+            Serial.print(calibration.grav().axes().toString());
+            Serial.println(F(") differ from firmware — using firmware axes."));
+            Serial.println(F("  Re-run calibration: the fit was made in the old frame."));
+            calibration.mag().setAxes(MAG_AXES);
+            calibration.grav().setAxes(GRAV_AXES);
+        }
+
         Serial.print(F("  Mag axes:  "));
         Serial.println(calibration.mag().axes().toString());
         Serial.print(F("  Grav axes: "));

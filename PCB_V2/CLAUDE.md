@@ -307,13 +307,29 @@ only when `syncPendingToFlash()` fails.
 
 ## ⚠ Commissioning still required
 
-1. ~~Determine real `MAG_AXES`/`GRAV_AXES`~~ **done 2026-07-10**: V2
-   mappings measured empirically (mag `+Y-X+Z`, grav `+Y-X-Z`) via raw-axis
-   snapshots in three poses; config.h and the embedded `CALIBRATION_JSON`
-   axes both updated. Still required: full on-device calibration (56-pt
-   ellipsoid + 24-pt alignment + F/B check) — the embedded transform/centre
-   data is still V1's, so `MagErr` and absolute-azimuth error persist until
-   then.
+1. ~~Determine real `MAG_AXES`/`GRAV_AXES`~~ **done 2026-07-10, grav
+   corrected 2026-09-19**: V2 mappings measured empirically (mag `+Y-X+Z`,
+   grav `+Y-X-Z`) via raw-axis snapshots in three poses; config.h and the
+   embedded `CALIBRATION_JSON` axes both updated.
+   That first pass read each axis off in isolation and so missed that
+   `GRAV_AXES` maps the *gravity* vector (down), not the accelerometer's raw
+   specific force (+1 g along whichever axis points up) — the gravity string
+   is the negation of the chip's physical mounting. The result put the accel
+   frame 180° rolled relative to the mag, the shared up vector came out
+   inverted, and the orientation matrix was mirrored: **turning from north
+   towards the east ran the azimuth backwards, 90° reading as 270°**, while
+   inclination stayed correct (it comes from gravity alone) and roll is
+   never shown. Fixed by `GRAV_AXES = "-Y-X+Z"` — a 180° roll of the gravity
+   vector about the laser axis. Swept against a synthetic field/attitude
+   model this reproduces azimuth and inclination exactly at every attitude;
+   the old string was out by up to 179° (a clean mirror only while level,
+   which is why a desk spin made it look like a pure sign error).
+   `loadCalibration()` now also re-applies the config.h axes over whatever a
+   stored `/calibration.{bin,json}` carried, printing a warning — a file
+   saved in the old frame can no longer shadow a corrected mapping.
+   Still required: full on-device calibration (56-pt ellipsoid + 24-pt
+   alignment + F/B check) — the embedded transform/centre data is still
+   V1's, so `MagErr` and absolute-azimuth error persist until then.
    **Serial debug commands** (normal mode only — the menu/cal/snake loops
    short-circuit before the handler): `r` prints one `RAW mag … | acc …`
    line (chip-frame values before `Axes::fixAxes`, for reading the mapping
@@ -325,9 +341,11 @@ only when `syncPendingToFlash()` fails.
    sent/acked/resend/failed-send counters) — the view for verifying the
    reading drain on the bench.
    Note the axes strings are ALSO stored inside saved calibrations
-   (`/calibration.{bin,json}`) — they override config.h at load. Boot serial
-   prints `Mag axes:`/`Grav axes:` showing what was actually loaded; if a
-   stale stored calibration shadows the new strings, re-calibrate
+   (`/calibration.{bin,json}`). Since 2026-09-19 the compiled-in strings win:
+   `loadCalibration()` overwrites the loaded ones and warns on serial. Boot
+   serial still prints `Mag axes:`/`Grav axes:` showing what is in force. A
+   calibration fitted under a different mapping is stale regardless — its
+   ellipsoid was fitted in the old frame — so re-calibrate
    (`calibration_mode.cpp` constructs from `MAG_AXES`/`GRAV_AXES`) or delete
    the stored files.
 
@@ -403,6 +421,9 @@ only when `syncPendingToFlash()` fails.
 - 2026-07-09: **USB drive mode added** (128 KB FAT12 partition on internal
   flash + TinyUSB MSC — see the "USB drive mode" section). Builds clean
   (RAM 10.4%, flash 57.8% of the new 668 KB app cap).
+- 2026-09-19: **azimuth mirroring fixed** — `GRAV_AXES` `+Y-X-Z` → `-Y-X+Z`
+  (commissioning item #1); stored calibrations no longer shadow the
+  compiled-in axis strings.
 - 2026-07-10: **axis mappings determined** (mag `+Y-X+Z`, grav `+Y-X-Z` —
   commissioning item #1) and the remaining on-device features exercised in a
   full test pass: buzzer sound vocabulary, disco/WS2812 (the temporary LED
