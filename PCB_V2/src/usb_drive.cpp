@@ -230,7 +230,12 @@ static const char README_TEXT[] = "Mr Zappy USB drive mode\r\n"
                                   "kept.\r\n"
                                   "\r\n"
                                   "Recovery: if this drive shows up corrupt, format it (FAT, 512-byte\r\n"
-                                  "sectors) from the PC and power-cycle - the device restages the files.\r\n";
+                                  "sectors) from the PC and power-cycle - the device restages the files.\r\n"
+                                  "\r\n"
+                                  "The hidden BACKUP folder is the device's own safety copy of its\r\n"
+                                  "settings and calibration, restored automatically if the internal\r\n"
+                                  "storage ever has to be reset. Leave it alone; formatting this drive\r\n"
+                                  "deletes it until the next save or power-on recreates it.\r\n";
 
 bool exportFiles(ConfigManager &cfgMgr) {
     if (!mountOrFormat()) {
@@ -276,6 +281,25 @@ static int readFatFile(const char *fatName, char *buf, size_t bufSize) {
     return (int)nRead;
 }
 
+// Shared 2 KB parse buffer for import and backup restore — sized to match
+// the boot-time parse buffers (config and calibration are both read into
+// 2 KB); anything bigger would be rejected at boot anyway. backupWrite()'s
+// compare path uses s_xferBuf, so s_fileBuf may be passed straight to it.
+static char s_fileBuf[2048];
+
+// Same acceptance test as the boot loaders: config must be a JSON object,
+// calibration additionally needs the mag + grav sections.
+static bool validJson(Backup which, const char *buf, size_t len) {
+    JsonDocument doc;
+    if (deserializeJson(doc, buf, len) != DeserializationError::Ok) {
+        return false;
+    }
+    if (which == Backup::CONFIG) {
+        return doc.is<JsonObject>();
+    }
+    return doc["mag"].is<JsonObject>() && doc["grav"].is<JsonObject>();
+}
+
 bool importFiles(ConfigManager &cfgMgr) {
     // The volume has been mounted since export, but the HOST has rewritten
     // the medium behind FatFs's back — its cached FAT/directory sectors are
@@ -288,16 +312,13 @@ bool importFiles(ConfigManager &cfgMgr) {
         return false;
     }
 
-    // Sized to match the boot-time parse buffers (config ≤1 KB read buffer,
-    // calibration ≤2 KB) — anything bigger would be rejected at boot anyway.
-    static char fileBuf[2048];
+    char *fileBuf = s_fileBuf;
     bool allValid = true;
 
     // ── CONFIG.JSON ──
-    int len = readFatFile("CONFIG.JSON", fileBuf, sizeof(fileBuf));
+    int len = readFatFile("CONFIG.JSON", fileBuf, sizeof(s_fileBuf));
     if (len > 0) {
-        JsonDocument doc;
-        if (deserializeJson(doc, fileBuf, (size_t)len) == DeserializationError::Ok && doc.is<JsonObject>()) {
+        if (validJson(Backup::CONFIG, fileBuf, (size_t)len)) {
             if (cfgMgr.saveConfigJsonRaw(fileBuf, (size_t)len)) {
                 Serial.println(F("  imported CONFIG.JSON"));
             } else {
@@ -313,11 +334,9 @@ bool importFiles(ConfigManager &cfgMgr) {
     }
 
     // ── CALIBRATION.JSON ──
-    len = readFatFile("CALIBRATION.JSON", fileBuf, sizeof(fileBuf));
+    len = readFatFile("CALIBRATION.JSON", fileBuf, sizeof(s_fileBuf));
     if (len > 0) {
-        JsonDocument doc;
-        if (deserializeJson(doc, fileBuf, (size_t)len) == DeserializationError::Ok &&
-            doc["mag"].is<JsonObject>() && doc["grav"].is<JsonObject>()) {
+        if (validJson(Backup::CALIBRATION, fileBuf, (size_t)len)) {
             if (cfgMgr.saveCalibrationJson(fileBuf, (size_t)len)) {
                 // Binary would shadow the JSON at boot — force JSON to win
                 cfgMgr.removeCalibrationBinary();
@@ -335,6 +354,184 @@ bool importFiles(ConfigManager &cfgMgr) {
     }
 
     return allValid;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ── Settings + calibration backup ──────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+
+// LittleFS on this chip does not survive a reset or a failed flash op
+// mid-commit (the core's flash HAL ignores SoftDevice flash errors), and the
+// only way out of a damaged filesystem is a format. These copies sit on the
+// FAT partition, which a format never touches, so a storage reset costs the
+// user their unsent readings rather than their calibration too (field
+// incident 2026-09-25: half-finished calibration, filesystem assert at boot).
+//
+// FAT has no atomic replace, so a write goes to .TMP, is read back, and only
+// then replaces the real copy; restore falls back to .TMP if the swap was
+// interrupted.
+
+static const char BACKUP_DIR[] = "BACKUP";
+
+static const char *backupPath(Backup which) {
+    return which == Backup::CONFIG ? "BACKUP/CONFIG.JSON" : "BACKUP/CALIB.JSON";
+}
+
+static const char *backupTmpPath(Backup which) {
+    return which == Backup::CONFIG ? "BACKUP/CONFIG.TMP" : "BACKUP/CALIB.TMP";
+}
+
+static const char *backupName(Backup which) { return which == Backup::CONFIG ? "settings" : "calibration"; }
+
+// True if the FAT file exists and holds exactly `data`.
+static bool fatFileEquals(const char *path, const char *data, size_t len) {
+    FIL f;
+    if (f_open(&f, path, FA_READ) != FR_OK) {
+        return false;
+    }
+    bool same = (f_size(&f) == len);
+    size_t off = 0;
+    while (same && off < len) {
+        UINT chunk = (UINT)min(len - off, sizeof(s_xferBuf));
+        UINT nRead = 0;
+        if (f_read(&f, s_xferBuf, chunk, &nRead) != FR_OK || nRead != chunk) {
+            same = false;
+            break;
+        }
+        same = (memcmp(s_xferBuf, data + off, chunk) == 0);
+        off += chunk;
+    }
+    f_close(&f);
+    return same;
+}
+
+// Read a whole LittleFS file into buf (null-terminated). Same return
+// convention as readFatFile: bytes read, 0 if missing/empty, -1 if too large.
+static int readLfsFile(const char *path, char *buf, size_t bufSize) {
+    File f(InternalFS);
+    if (!f.open(path, FILE_O_READ)) {
+        return 0;
+    }
+    size_t size = f.size();
+    if (size == 0 || size >= bufSize) {
+        f.close();
+        return size == 0 ? 0 : -1;
+    }
+    int n = f.read(buf, size);
+    f.close();
+    if (n != (int)size) {
+        return -1;
+    }
+    buf[n] = '\0';
+    return n;
+}
+
+bool backupWrite(Backup which, const char *data, size_t len) {
+    if (s_hostAccess || len == 0) {
+        return false; // the host owns the volume in drive mode
+    }
+    if (!mountOrFormat()) {
+        return false;
+    }
+
+    const char *path = backupPath(which);
+    const char *tmp = backupTmpPath(which);
+    if (fatFileEquals(path, data, len)) {
+        return true; // unchanged — no flash wear
+    }
+
+    FRESULT rc = f_mkdir(BACKUP_DIR);
+    if (rc == FR_OK) {
+        f_chmod(BACKUP_DIR, AM_HID | AM_SYS, AM_HID | AM_SYS);
+    } else if (rc != FR_EXIST) {
+        Serial.print(F("  backup: mkdir FAILED rc="));
+        Serial.println(rc);
+        return false;
+    }
+
+    FIL f;
+    bool ok = (f_open(&f, tmp, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK);
+    if (ok) {
+        UINT written = 0;
+        ok = (f_write(&f, data, (UINT)len, &written) == FR_OK) && written == len;
+        ok = (f_close(&f) == FR_OK) && ok;
+    }
+    flash_nrf5x_flush();
+    ok = ok && fatFileEquals(tmp, data, len); // read back before trusting it
+    if (!ok) {
+        f_unlink(tmp);
+        Serial.print(F("  backup: write FAILED ("));
+        Serial.print(backupName(which));
+        Serial.println(F(")"));
+        return false;
+    }
+
+    f_unlink(path); // FR_NO_FILE on the first write is fine
+    if (f_rename(tmp, path) != FR_OK) {
+        // The verified .TMP stays behind and restore knows to look for it
+        Serial.println(F("  backup: rename FAILED"));
+        flash_nrf5x_flush();
+        return false;
+    }
+    flash_nrf5x_flush();
+    Serial.print(F("  backup: "));
+    Serial.print(backupName(which));
+    Serial.println(F(" updated"));
+    return true;
+}
+
+// Reconcile one file; true if it was restored from the backup.
+static bool syncOne(ConfigManager &cfgMgr, Backup which) {
+    const char *lfsPath = which == Backup::CONFIG ? "/config.json" : "/calibration.json";
+
+    int len = readLfsFile(lfsPath, s_fileBuf, sizeof(s_fileBuf));
+    if (len > 0 && validJson(which, s_fileBuf, (size_t)len)) {
+        backupWrite(which, s_fileBuf, (size_t)len); // seed / refresh
+        return false;
+    }
+    if (which == Backup::CALIBRATION && InternalFS.exists("/calibration.bin")) {
+        return false; // boot loads the binary — nothing is missing
+    }
+
+    // Missing or unparseable on LittleFS — take the newest valid copy
+    const char *candidates[] = {backupPath(which), backupTmpPath(which)};
+    for (const char *path : candidates) {
+        int n = readFatFile(path, s_fileBuf, sizeof(s_fileBuf));
+        if (n <= 0 || !validJson(which, s_fileBuf, (size_t)n)) {
+            continue;
+        }
+        bool ok = which == Backup::CONFIG ? cfgMgr.saveConfigJsonRaw(s_fileBuf, (size_t)n)
+                                          : cfgMgr.saveCalibrationJson(s_fileBuf, (size_t)n);
+        Serial.print(F("  Restored "));
+        Serial.print(backupName(which));
+        Serial.print(F(" from backup: "));
+        Serial.println(ok ? F("OK") : F("FAILED"));
+        return ok;
+    }
+    return false;
+}
+
+RestoreResult syncBackups(ConfigManager &cfgMgr) {
+    RestoreResult r;
+    if (!cfgMgr.isReady() || !mountOrFormat()) {
+        return r;
+    }
+    r.config = syncOne(cfgMgr, Backup::CONFIG);
+    r.calibration = syncOne(cfgMgr, Backup::CALIBRATION);
+    return r;
+}
+
+bool clearBackups() {
+    if (!mountOrFormat()) {
+        return false;
+    }
+    f_unlink(backupPath(Backup::CONFIG));
+    f_unlink(backupTmpPath(Backup::CONFIG));
+    f_unlink(backupPath(Backup::CALIBRATION));
+    f_unlink(backupTmpPath(Backup::CALIBRATION));
+    flash_nrf5x_flush();
+    Serial.println(F("  backup: cleared"));
+    return true;
 }
 
 } // namespace UsbDrive

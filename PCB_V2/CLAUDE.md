@@ -274,9 +274,42 @@ only when `syncPendingToFlash()` fails.
   **DOWN+MENU held at power-on = storage factory reset** (confirm screen,
   hold FIRE 3 s to erase — formats LittleFS without reading the old
   metadata, the only route that recovers from corruption that hangs the
-  filesystem code itself). Don't reassign any of these without updating
+  filesystem code itself; settings + calibration then come back from the
+  backup, and holding UP as the erase fires wipes the backup too).
+  Don't reassign any of these without updating
   the recovery docs. These button checks run BEFORE the first
   `configMgr.begin()` in setup() — keep that order (see next gotcha).
+  Every button read there needs its `INPUT_PULLUP` set first: UP had
+  none, floated LOW, and the first repair on hardware silently took the
+  "+UP: wipe backup" branch (2026-09-25).
+- **Damaged storage reboots into a repair screen, not a freeze** (v2.0.3).
+  A corrupt LittleFS doesn't return errors — littlefs trips an `assert`
+  (field unit 2026-09-25: `block < lfs->cfg->block_count` in
+  `lfs_cache_read`, right after "Pending readings: 3"), and newlib's
+  handler halted on the splash screen. `__assert_func` in main.cpp now
+  sets `GPREGRET2 = 0xA7` (survives the bootloader — verified on hardware)
+  and resets; setup() reads the mark before any storage call and shows
+  STORAGE DAMAGED: hold FIRE 3 s = reset + restore from backup, power
+  button = off, auto-off after 2 min. There is no "carry on without
+  storage" option on purpose: Bluefruit keeps bonds on the same LittleFS
+  and asserts in `Bluefruit.begin()` (tried — it looped). Non-littlefs
+  asserts still halt, but the power button works.
+- **Settings/calibration backup on the FAT partition** (v2.0.3). Every
+  successful `saveConfig`/`saveConfigJsonRaw`/`saveCalibrationJson`
+  mirrors the JSON into hidden `BACKUP/CONFIG.JSON` / `BACKUP/CALIB.JSON`
+  (`UsbDrive::backupWrite`: skip if identical, write `.TMP`, read back,
+  swap). `UsbDrive::syncBackups()` runs in `initFlash()` after the USB
+  import: a valid LittleFS copy seeds/refreshes the backup, a missing or
+  unparseable one is restored from it (calibration only when neither
+  `.json` nor `.bin` exists). Any LittleFS format — menu, DOWN+MENU,
+  repair screen — therefore costs only unsent readings. Formatting the
+  MRZAPPY drive from a PC deletes the backup until the next save/boot.
+- LittleFS on this chip is **not** power-loss safe in practice: the
+  core's flash HAL ignores SoftDevice flash-op failures, and prog/erase
+  go through a one-page RAM cache. Firmware power-offs can't interrupt a
+  save (same loop task) and `doShutdown()` flushes the page cache; the
+  hardware long-hold kill, a flat battery, or a touch-reset during a
+  write still can — hence the backup above.
 - **The loop task has a 4 KB stack — never put ≥1 KB of locals in code it
   runs** (setup/loop and everything they call). `CalibrationMode::
   saveCalibration()` had 2.5 KB of locals; at the deepest LittleFS write
@@ -389,6 +422,14 @@ only when `syncPendingToFlash()` fails.
 
 ## Status
 
+- 2026-09-25 (v2.0.3): **damaged storage no longer freezes the device.** A
+  unit stuck on the splash after an interrupted ellipsoid calibration was
+  a littlefs assert on corrupt metadata. Added the repair screen, the FAT
+  backup of settings + calibration, and the shutdown cache flush (see
+  Gotchas). Verified on that unit: assert → reboot → STORAGE DAMAGED →
+  repair → normal boot and a measurement. Root cause of that corruption
+  not pinned down; the save path's stack use (88 B) rules out a repeat of
+  the 2026-07-22 overflow.
 - 2026-09-14: **reading delivery reworked so no leg can be lost to a dropout**
   (see "Reading delivery"). Readings taken while connected were never
   persisted; the reconnect flush dropped everything past 20 queued legs and

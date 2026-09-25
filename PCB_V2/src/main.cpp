@@ -23,6 +23,7 @@
 #include "usb_drive.h"
 #include <Adafruit_TinyUSB.h>
 #include <Arduino.h>
+#include <flash/flash_nrf5x.h> // explicit page-cache flush before power-off
 #include <SPI.h>
 #include <Wire.h>
 #include <cstdint>
@@ -98,6 +99,79 @@ bool bleOk = false;
 bool calOk = false;
 bool calFromFlash = false; // true = loaded from flash, false = PROGMEM fallback
 bool flashOk = false;
+
+// ── Storage-fault recovery ──────────────────────────────────────────
+// A damaged LittleFS does not fail cleanly: littlefs trips an assert
+// (e.g. "block < lfs->cfg->block_count" in lfs_cache_read) and newlib's
+// default handler halts, leaving the device frozen on the splash screen
+// with no hint of the way out (field incident 2026-09-25). Our
+// __assert_func below instead records the fault in GPREGRET2 — retained
+// across a soft reset, untouched by the bootloader, which uses GPREGRET —
+// and reboots; setup() sees the mark before touching storage and offers the
+// repair (storage reset + restore from backup). There is deliberately no
+// "carry on without storage" choice: Bluefruit keeps its bonds on the same
+// LittleFS and trips the same assert in Bluefruit.begin() (tried on the
+// damaged unit, 2026-09-25 — it just looped back to the prompt).
+static constexpr uint8_t STORAGE_FAULT_MARK = 0xA7;
+static UsbDrive::RestoreResult bootRestore; // what syncBackups() put back
+
+static void setStorageFaultMark() {
+    uint8_t sdEnabled = 0;
+    (void)sd_softdevice_is_enabled(&sdEnabled);
+    if (sdEnabled) {
+        // POWER registers are SoftDevice-owned once BLE is up
+        sd_power_gpregret_clr(1, 0xFF);
+        sd_power_gpregret_set(1, STORAGE_FAULT_MARK);
+    } else {
+        NRF_POWER->GPREGRET2 = STORAGE_FAULT_MARK;
+    }
+}
+
+// Read-and-clear. Only called early in setup(), before Bluefruit enables
+// the SoftDevice, so the register is ours to touch directly.
+static bool takeStorageFaultMark() {
+    bool marked = (NRF_POWER->GPREGRET2 == STORAGE_FAULT_MARK);
+    NRF_POWER->GPREGRET2 = 0;
+    return marked;
+}
+
+// Busy-wait: an assert may fire with the scheduler in any state, so
+// delay() (which yields to FreeRTOS) is off limits in the handler.
+static void assertSpinMs(uint32_t ms) {
+    for (uint32_t i = 0; i < ms; i++) {
+        delayMicroseconds(1000);
+    }
+}
+
+extern "C" [[noreturn]] void __assert_func(const char *file, int line, const char *func, const char *expr) {
+    Serial.print(F("assertion \""));
+    Serial.print(expr ? expr : "?");
+    Serial.print(F("\" failed: file \""));
+    Serial.print(file ? file : "?");
+    Serial.print(F("\", line "));
+    Serial.print(line);
+    Serial.print(F(", function: "));
+    Serial.println(func ? func : "?");
+
+    bool storageFault = file && (strstr(file, "littlefs") || strstr(file, "LittleFS"));
+    if (storageFault) {
+        Serial.println(F("STORAGE FAULT — rebooting into recovery"));
+        assertSpinMs(200); // give the USB task a chance to drain the log
+        setStorageFaultMark();
+        NVIC_SystemReset();
+    }
+
+    // Any other assert is a firmware bug with no automatic way out. Halt as
+    // newlib would, but keep the power button working so the user doesn't
+    // have to hold it for the hardware kill.
+    while (true) {
+        if (power.buttonPressed()) {
+            power.powerOff();
+        }
+        assertSpinMs(10);
+    }
+}
+
 static bool enterMenuMode = false;
 static bool enterCalibMode = false;
 static bool enterSnakeMode = false;
@@ -238,7 +312,7 @@ static void alertError(const char *errCode, const char *detail = nullptr);
 static void resetLaser();
 static void doShutdown();
 static void enterUsbDriveMode(); // modal USB MSC settings drive — reboots on exit
-static void storageFactoryReset(); // boot combo DOWN+MENU — resets if confirmed
+static void storageFactoryReset(bool damaged); // DOWN+MENU / storage fault — resets if confirmed
 
 const bool REGULAR_SHOT = false;
 const bool QUICK_SHOT = true;
@@ -285,6 +359,7 @@ void setup() {
     pinMode(PIN_BTN_FIRE, INPUT_PULLUP);
     pinMode(PIN_BTN_MENU, INPUT_PULLUP);
     pinMode(PIN_BTN_DOWN, INPUT_PULLUP);
+    pinMode(PIN_BTN_UP_DISCO, INPUT_PULLUP); // storage reset reads UP (+UP: no restore)
     delayMicroseconds(50); // let pull-ups settle before reading
 
     // ── Early USB drive mode check ─────────────────────────────────
@@ -299,11 +374,17 @@ void setup() {
     // forever), so both button routes below are checked BEFORE the first
     // configMgr.begin().
     {
+        // Last run died on a littlefs assert (see __assert_func) — offer the
+        // repair before anything touches the damaged filesystem again.
+        if (takeStorageFaultMark()) {
+            storageFactoryReset(true); // modal — resets or powers off, never returns
+        }
+
         // DOWN+MENU held at power-on = storage factory reset. Formats the
         // LittleFS region without ever reading the old metadata — the only
         // route that works no matter how mangled the filesystem is.
         if (digitalRead(PIN_BTN_DOWN) == LOW && digitalRead(PIN_BTN_MENU) == LOW) {
-            storageFactoryReset(); // modal — resets if confirmed, else returns
+            storageFactoryReset(false); // modal — resets if confirmed, else returns
         }
 
         if (digitalRead(PIN_BTN_DOWN) == LOW) {
@@ -382,22 +463,38 @@ void setup() {
     initFlash();
     initBle();
 
-    // Warn user if flash was auto-reformatted (all saved data lost)
-    if (flashOk && configMgr.wasReformatted() && dispOk) {
+    // Tell the user what a reformat cost them — this boot's auto-format, or
+    // a reset (menu / DOWN+MENU / damaged-storage repair) on the last run,
+    // which shows up as the backup being restored.
+    bool restored = bootRestore.config || bootRestore.calibration;
+    if (flashOk && (configMgr.wasReformatted() || restored) && dispOk) {
         auto &disp = display.getDisplay();
         display.blankScreen();
         disp.setTextColor(SH110X_WHITE);
         disp.setTextSize(2);
         disp.setCursor(0, 10);
-        disp.println(F("FLASH"));
-        disp.println(F("RECOVERED"));
+        disp.println(F("STORAGE"));
+        disp.println(configMgr.wasReformatted() ? F("RECOVERED") : F("RESTORED"));
         disp.setTextSize(1);
         disp.println();
-        disp.println(F("Storage was corrupt."));
-        disp.println(F("Reformatted OK."));
-        disp.println();
-        disp.println(F("Calibration &"));
-        disp.println(F("settings were lost."));
+        if (configMgr.wasReformatted()) {
+            disp.println(F("Storage was corrupt."));
+            disp.println(F("Reformatted OK."));
+            disp.println();
+        }
+        if (bootRestore.config) {
+            disp.println(F("Settings restored"));
+        }
+        if (bootRestore.calibration) {
+            disp.println(F("Calibration restored"));
+        }
+        if (!restored) {
+            disp.println(F("No backup found:"));
+            disp.println(F("settings+calibration"));
+            disp.println(F("were lost."));
+        } else {
+            disp.println(F("from backup."));
+        }
         disp.display();
         delay(5000);
     }
@@ -795,6 +892,9 @@ void loop() {
             d.setTextColor(SH110X_WHITE);
             d.setCursor(0, 40);
             d.println(F("Erasing storage..."));
+            d.println();
+            d.println(F("Settings+calibration"));
+            d.println(F("restore from backup."));
             d.println();
             d.println(F("Device will restart."));
             d.display();
@@ -2118,6 +2218,11 @@ static void doShutdown() {
     if (flashOk && configMgr.hasPendingToSync()) {
         configMgr.syncPendingToFlash();
     }
+    // Every save runs to completion on this same loop task before we can
+    // get here, so no write is ever cut mid-commit by a firmware power-off.
+    // What can remain is the flash HAL's one-page write cache — commit it
+    // explicitly rather than trusting the last caller to have synced.
+    flash_nrf5x_flush();
     Serial.flush();
     delay(100); // let the LittleFS write settle before cutting the rail
     if (dispOk) {
@@ -2156,7 +2261,17 @@ void bleRadioQuiet(bool quiet) {
 // only writes fresh superblocks — it does not read the old metadata — so
 // this works no matter how mangled the region is. Old blocks become
 // unreachable garbage that the allocator never visits.
-static void storageFactoryReset() {
+//
+// Two entry routes share this screen: the DOWN+MENU boot combo (damaged =
+// false; timing out cancels) and the storage-fault mark left by
+// __assert_func (damaged = true; there is no booting past damaged storage,
+// so this waits for the repair or the power button and switches itself off
+// after two minutes rather than sit draining the battery).
+// Settings and calibration come back from the FAT-partition backup on the
+// next boot (UsbDrive::syncBackups); holding UP as the erase fires wipes
+// the backup too, for a genuine back-to-defaults.
+static void storageFactoryReset(bool damaged) {
+    const uint32_t timeoutMs = damaged ? 120000 : 15000;
     if (dispOk) {
         auto &d = display.getDisplay();
         d.clearDisplay();
@@ -2164,24 +2279,29 @@ static void storageFactoryReset() {
         d.setTextSize(2);
         d.setCursor(0, 0);
         d.println(F("STORAGE"));
-        d.println(F("RESET"));
+        d.println(damaged ? F("DAMAGED") : F("RESET"));
         d.setTextSize(1);
         d.println();
-        d.println(F("Erases ALL settings"));
-        d.println(F("and calibration."));
+        d.println(damaged ? F("Hold FIRE 3s: repair") : F("Hold FIRE 3s: erase"));
+        d.println(F("Settings+calibration"));
+        d.println(F("restore from backup;"));
+        d.println(F("unsent readings lost"));
+        d.println(F("(+UP: no restore)"));
         d.println();
-        d.println(F("Hold FIRE 3s: erase"));
-        d.println(F("Wait 15s: cancel"));
+        d.println(damaged ? F("Power button: off") : F("Wait 15s: cancel"));
         d.display();
     }
+    Serial.println(damaged ? F("Storage damaged — recovery prompt") : F("Storage reset prompt"));
 
     uint32_t start = millis();
     uint32_t fireSince = 0;
-    while (millis() - start < 15000) {
+    while (millis() - start < timeoutMs) {
+        pollPowerButton(millis()); // power button still switches off
         if (digitalRead(PIN_BTN_FIRE) == LOW) {
             if (fireSince == 0) {
                 fireSince = millis();
             } else if (millis() - fireSince >= 3000) {
+                bool wipeBackup = (digitalRead(PIN_BTN_UP_DISCO) == LOW);
                 if (dispOk) {
                     auto &d = display.getDisplay();
                     d.clearDisplay();
@@ -2190,6 +2310,9 @@ static void storageFactoryReset() {
                     d.setCursor(0, 40);
                     d.println(F("Erasing..."));
                     d.display();
+                }
+                if (wipeBackup) {
+                    UsbDrive::clearBackups(); // FAT side only — safe pre-mount
                 }
                 configMgr.reformat(); // pre-mount: writes fresh superblocks only
                 if (dispOk) {
@@ -2212,8 +2335,13 @@ static void storageFactoryReset() {
         }
         delay(10);
     }
-    // Timed out — treat as cancel and continue the normal boot (DOWN is
-    // still held, so this falls through into USB drive mode).
+
+    if (damaged) {
+        Serial.println(F("  no repair chosen — powering off"));
+        doShutdown(); // storage is still damaged — the next boot asks again
+    }
+    // Combo route: timed out — treat as cancel and continue the normal boot
+    // (DOWN is still held, so this falls through into USB drive mode).
 }
 
 static void enterUsbDriveMode() {
@@ -2413,6 +2541,13 @@ static void initFlash() {
         if (UsbDrive::mountOrFormat()) {
             UsbDrive::importFiles(configMgr);
         }
+    }
+
+    // After the import (so host edits land in the backup), before anything
+    // loads: seed/refresh the FAT-partition backup, or restore settings and
+    // calibration from it after a storage reset.
+    if (flashOk) {
+        bootRestore = UsbDrive::syncBackups(configMgr);
     }
 
     if (flashOk) {

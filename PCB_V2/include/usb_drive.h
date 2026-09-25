@@ -15,6 +15,9 @@ class ConfigManager;
 // The host owns the FAT volume while the drive is exposed — firmware never
 // touches it in between. Exit-by-power-cycle is covered by the usb_import
 // boot flag: the next normal boot runs the same validated import.
+//
+// Outside drive mode the partition also carries the settings/calibration
+// backup (see below).
 namespace UsbDrive {
 
 // Register the mass-storage USB interface. Call as early as possible in
@@ -41,5 +44,34 @@ void setHostAccess(bool on);
 // calibration import also deletes /calibration.bin so the JSON wins at the
 // next boot. Returns false if a file existed but failed validation.
 bool importFiles(ConfigManager &cfgMgr);
+
+// ── Settings + calibration backup ──────────────────────────────────
+// A second copy of /config.json and /calibration.json lives in a hidden
+// BACKUP folder on the FAT partition. A LittleFS format (menu Reformat
+// Storage, the DOWN+MENU boot reset, or the storage-damaged recovery screen)
+// never touches that partition, so the next boot puts them back — only
+// unsent readings are lost. ConfigManager calls backupWrite() after every
+// successful save; syncBackups() runs once per boot.
+
+enum class Backup : uint8_t { CONFIG, CALIBRATION };
+
+// Mirror `data` into the backup copy. Skips the write when the stored copy
+// already matches, so an unchanged save costs reads only. False while the
+// host owns the volume (drive mode) or if the FAT partition misbehaves.
+bool backupWrite(Backup which, const char *data, size_t len);
+
+struct RestoreResult {
+    bool config = false;
+    bool calibration = false;
+};
+
+// Boot-time reconcile. For each file: a valid LittleFS copy refreshes the
+// backup (seeds it on the first boot of this firmware); a missing or
+// unparseable one is restored from a valid backup. Calibration counts as
+// missing only when neither /calibration.json nor /calibration.bin exists.
+RestoreResult syncBackups(ConfigManager &cfgMgr);
+
+// Delete both backup copies (storage reset with UP held: "erase everything").
+bool clearBackups();
 
 } // namespace UsbDrive

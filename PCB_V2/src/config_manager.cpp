@@ -1,6 +1,7 @@
 #include "config_manager.h"
 #include "config.h"
 #include "mag_cal/calibration.h"
+#include "usb_drive.h"
 
 #include <Adafruit_LittleFS.h>
 #include <ArduinoJson.h>
@@ -272,14 +273,22 @@ bool ConfigManager::saveConfig(const Config &cfg) {
         return false;
     }
 
-    return writeFileAtomic("/config.json", "/cfg_tmp.json", reinterpret_cast<const uint8_t *>(buf), len);
+    if (!writeFileAtomic("/config.json", "/cfg_tmp.json", reinterpret_cast<const uint8_t *>(buf), len)) {
+        return false;
+    }
+    UsbDrive::backupWrite(UsbDrive::Backup::CONFIG, buf, len); // best effort
+    return true;
 }
 
 bool ConfigManager::saveConfigJsonRaw(const char *json, size_t len) {
     if (!mounted_) {
         return false;
     }
-    return writeFileAtomic("/config.json", "/cfg_tmp.json", reinterpret_cast<const uint8_t *>(json), len);
+    if (!writeFileAtomic("/config.json", "/cfg_tmp.json", reinterpret_cast<const uint8_t *>(json), len)) {
+        return false;
+    }
+    UsbDrive::backupWrite(UsbDrive::Backup::CONFIG, json, len); // best effort
+    return true;
 }
 
 // ── Calibration data ───────────────────────────────────────────────
@@ -314,8 +323,11 @@ bool ConfigManager::saveCalibrationJson(const char *json, size_t len) {
     if (!mounted_) {
         return false;
     }
-    return writeFileAtomic("/calibration.json", "/cal_tmp.json", reinterpret_cast<const uint8_t *>(json),
-                           len);
+    if (!writeFileAtomic("/calibration.json", "/cal_tmp.json", reinterpret_cast<const uint8_t *>(json), len)) {
+        return false;
+    }
+    UsbDrive::backupWrite(UsbDrive::Backup::CALIBRATION, json, len); // best effort
+    return true;
 }
 
 bool ConfigManager::loadCalibrationBinary(MagCal::CalibrationBinary &out) {
