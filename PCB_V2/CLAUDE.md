@@ -403,6 +403,19 @@ only when `syncPendingToFlash()` fails.
    SCA3300/RM3100 pair is much quieter than V1's IMU) and V1's motion-gated
    display freeze/anchor clamp removed in favour of a plain 0.10° deadband
    (`updateDisplay`, main.cpp). Confirm underground with real survey legs.
+   **Retuned 2026-09-26 from a hand-held capture** (a temporary per-update
+   serial log of the filter inputs, since removed; 21 holds;
+   hand tremor 0.2-0.3° SD vs 0.02° on the table). The measurement no
+   longer uses the EMA: `SensorManager::stableAverage` waits until every
+   median-filtered reading in the last `stability_buffer_length` x 100 ms
+   (0.5 s) is within `steady_tolerance` of the window mean, and records
+   that mean. At the old 0.5° limit ~60% of presses on a steady aim never
+   accepted; 1.0° accepts 96%, 90% within 0.9 s, with no >1° readings from
+   presses made mid-swing and the recorded aim ~0.1° from the hold mean.
+   `emaAlphaStable` 0.15 → 0.05 (display only now): digits changed ~3x/s
+   on a steady hold, now ~1.5x/s, and it settles within 0.5° faster.
+   Only `steady_tolerance` is user-editable; the rest are firmware
+   constants, so a retune reaches devices on the next flash.
 4. BLE needs a phone run (SexyTopo / nRF Connect): 17-byte legs, ACK/seq
    bit, commands, Coded PHY on Android (iOS = 1 Mbps, normal). Since
    2026-09-14 this must also prove the delivery drain (see "Reading

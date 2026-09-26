@@ -11,7 +11,12 @@ void SensorManager::init(const MagCal::Calibration *cal, float emaAlphaStable, f
     emaAlphaStable_ = emaAlphaStable;
     emaAlphaMoving_ = emaAlphaMoving;
     jumpThreshold_ = jumpThreshold;
-    stabLen_ = (stabilityLen > MAX_STAB_BUF) ? MAX_STAB_BUF : stabilityLen;
+    if (stabilityLen < 2) {
+        stabilityLen = 2;
+    } else if (stabilityLen > MAX_STAB_LEN) {
+        stabilityLen = MAX_STAB_LEN;
+    }
+    stabLen_ = stabilityLen * STAB_SAMPLES_PER_100MS;
     resetStability();
 
     emaSeeded_ = false;
@@ -42,6 +47,15 @@ void SensorManager::update(const Eigen::Vector3f &rawMag, const Eigen::Vector3f 
     float filtAz = medianAzimuth();
     float filtInc = medianInclination();
 
+    // Stability window takes the median-filtered angles, not the EMA: the
+    // window is averaged for the recorded reading, and the EMA's lag would
+    // make a settling device look like it is still moving.
+    uint32_t now = millis();
+    if ((now - lastStabPushMs_) >= stabIntervalMs_) {
+        pushStability(filtAz, filtInc);
+        lastStabPushMs_ = now;
+    }
+
     // 3) EMA smooth — adaptive alpha: low when the device is still (max
     //    smoothing), high when it is moving (fast tracking).
     //    Jump detection: snap EMA directly when error exceeds threshold
@@ -63,13 +77,6 @@ void SensorManager::update(const Eigen::Vector3f &rawMag, const Eigen::Vector3f 
             emaInc_ = alpha * filtInc + (1.0f - alpha) * emaInc_;
         }
     }
-
-    // 4) Push into stability ring buffer (decimated to stabIntervalMs_)
-    uint32_t now = millis();
-    if ((now - lastStabPushMs_) >= stabIntervalMs_) {
-        pushStability(emaAz_, emaInc_);
-        lastStabPushMs_ = now;
-    }
 }
 
 // ── Circular EMA for azimuth ────────────────────────────────────────
@@ -90,16 +97,59 @@ void SensorManager::pushStability(float az, float inc) {
     }
 }
 
-bool SensorManager::isStable(const ILegChecker &checker) const {
+void SensorManager::unitVector(float azDeg, float incDeg, float &x, float &y, float &z) {
+    float a = degreesToRadians(azDeg);
+    float e = degreesToRadians(incDeg);
+    x = cosf(e) * cosf(a);
+    y = cosf(e) * sinf(a);
+    z = sinf(e);
+}
+
+bool SensorManager::stableAverage(float toleranceDeg, float &az, float &inc, float *spreadDeg) const {
     if (stabCount_ < stabLen_) {
         return false;
     }
-
-    Shot shots[MAX_STAB_BUF];
-    for (uint8_t i = 0; i < stabCount_; i++) {
-        shots[i] = Shot(azBuf_[i], incBuf_[i], 1.0f);
+    if (!(toleranceDeg > 0.1f) || !std::isfinite(toleranceDeg)) {
+        toleranceDeg = 0.5f; // same guard AngularLegChecker::setTolerance applied
     }
-    return checker.hasValidLeg(shots, stabCount_);
+
+    // Average as unit vectors: immune to the 0/360 wrap and to azimuth
+    // becoming meaningless near vertical.
+    float mx = 0.0f, my = 0.0f, mz = 0.0f;
+    for (uint8_t i = 0; i < stabCount_; i++) {
+        float x, y, z;
+        unitVector(azBuf_[i], incBuf_[i], x, y, z);
+        mx += x;
+        my += y;
+        mz += z;
+    }
+    float norm = sqrtf(mx * mx + my * my + mz * mz);
+    if (norm < 1e-6f) {
+        return false;
+    }
+    mx /= norm;
+    my /= norm;
+    mz /= norm;
+
+    float minDot = 1.0f;
+    for (uint8_t i = 0; i < stabCount_; i++) {
+        float x, y, z;
+        unitVector(azBuf_[i], incBuf_[i], x, y, z);
+        float dot = x * mx + y * my + z * mz;
+        if (dot < minDot) {
+            minDot = dot;
+        }
+    }
+    if (spreadDeg) {
+        *spreadDeg = radiansToDegrees(acosf(fminf(minDot, 1.0f)));
+    }
+    if (minDot < cosf(degreesToRadians(toleranceDeg))) {
+        return false;
+    }
+
+    az = wrapTo360(radiansToDegrees(atan2f(my, mx)));
+    inc = radiansToDegrees(asinf(mz));
+    return true;
 }
 
 void SensorManager::resetStability() {

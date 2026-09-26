@@ -10,11 +10,17 @@ constexpr float dipTolerance = 10.0f;  // degrees
 // flags MagErr, which trains you to ignore the warning. Turn back on once a
 // device has had its own on-device calibration (commissioning item #1).
 constexpr bool anomalyDetection = false;
-constexpr float stabilityTolerance = 0.5f;    // degrees
+// Filter tuning below was fitted on 2026-09-26 against a hand-held capture
+// (a temporary serial log, since removed): hand tremor is ~0.2-0.3 deg SD, so a 0.5 deg limit
+// rejected ~60% of FIRE presses on a steady aim; replaying the real presses
+// then showed 1.0 deg / 0.5 s still cost ~1 s after arriving on target, so
+// 1.5 deg / 0.3 s (~0.5 s, aim within ~0.3 deg). Only stabilityTolerance is
+// user-editable (config.json "steady_tolerance"); the rest are constants.
+constexpr float stabilityTolerance = 1.5f;    // degrees — max deviation of any reading from the window mean
 constexpr float quickShotStabilityTol = 8.0f; // degrees (wider for splay shots)
-constexpr uint8_t stabilityBufferLength = 5;
-constexpr float emaAlphaStable = 0.15f;         // stationary alpha — lightened for the low-noise
-                                                // SCA3300/RM3100 (V1's noisy IMU needed 0.05)
+constexpr uint8_t stabilityBufferLength = 3;   // x 100 ms steady window (clamped 2-10)
+constexpr float emaAlphaStable = 0.05f;         // stationary alpha — heavy, to hide hand tremor on
+                                                // the display (0.15 changed the digits ~3x/s)
 constexpr float emaAlphaMoving = 0.6f;          // high alpha when moving (responsive)
 constexpr float emaJumpThreshold = 8.0f;        // degrees — snap EMA when error exceeds this
 constexpr float legAngleTolerance = 1.7f;       // degrees

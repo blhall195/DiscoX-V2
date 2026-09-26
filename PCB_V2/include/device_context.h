@@ -85,8 +85,7 @@ struct DeviceContext {
     CartesianLegChecker legChecker{Defaults::cartesianTolerance};
     ShotBuffer shotBuf = ShotBuffer(legChecker);
 
-    // Stability checker (angular, tolerance in degrees)
-    AngularLegChecker stabilityChecker{Defaults::stabilityTolerance};
+    // Stability is SensorManager::stableAverage against config.stabilityTolerance
     AngularLegChecker quickShotStabilityChecker{Defaults::quickShotStabilityTol};
 
     // (EMA state lives in SensorManager — complementary gravity filter + EMA

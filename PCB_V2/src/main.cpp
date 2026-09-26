@@ -1546,12 +1546,13 @@ static void pollMeasurement(uint32_t now) {
         return;
     }
 
-    // const ILegChecker &stabChecker = ctx.quickShot ?
-    // ctx.quickShotStabilityChecker : ctx.stabilityChecker;
-    const ILegChecker &stabChecker = ctx.stabilityChecker;
-
-    // No stability checking for quick shots. (In Beta)
-    if (!ctx.quickShot && !sensorMgr.isStable(stabChecker)) {
+    // A leg waits for ~0.5 s of steady readings and records their average;
+    // quick shots skip the wait and take the live EMA. (In Beta)
+    float shotAz = sensorMgr.getAzimuth();
+    float shotInc = sensorMgr.getInclination();
+    float spread = 0.0f;
+    if (!ctx.quickShot &&
+        !sensorMgr.stableAverage(ctx.config.stabilityTolerance, shotAz, shotInc, &spread)) {
         static uint32_t lastStabDbg = 0;
         uint32_t n = millis();
         if (n - lastStabDbg > 1000) {
@@ -1559,16 +1560,19 @@ static void pollMeasurement(uint32_t now) {
             Serial.print(F("MEAS: waiting stable  AZ="));
             Serial.print(sensorMgr.getAzimuth(), 1);
             Serial.print(F(" INC="));
-            Serial.println(sensorMgr.getInclination(), 1);
+            Serial.print(sensorMgr.getInclination(), 1);
+            Serial.print(F(" spread="));
+            Serial.println(spread, 2);
         }
         return;
     }
 
-    Serial.println(F("MEAS: taking measurement"));
+    Serial.print(F("MEAS: taking measurement  spread="));
+    Serial.println(spread, 2);
 
     // ── Stable — take measurement ────────────────────────────
-    ctx.readings.azimuth = sensorMgr.getAzimuth();
-    ctx.readings.inclination = sensorMgr.getInclination();
+    ctx.readings.azimuth = shotAz;
+    ctx.readings.inclination = shotInc;
     ctx.readings.roll = sensorMgr.getRoll();
 
     // Flush any stale UART data before talking to laser
@@ -2584,7 +2588,6 @@ static void initFlash() {
             configMgr.saveConfig(ctx.config);
         }
         ctx.legChecker.setTolerance(ctx.config.cartesianTolerance);
-        ctx.stabilityChecker.setTolerance(ctx.config.stabilityTolerance);
 
         if (dispOk) {
             display.setBrightness(ctx.config.screenBrightness);
