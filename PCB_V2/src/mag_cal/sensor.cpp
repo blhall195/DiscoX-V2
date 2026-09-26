@@ -445,6 +445,35 @@ void Sensor::setNonLinearParams(const float *params, int totalCount) {
     }
 }
 
+Eigen::Matrix3f Sensor::reframe(const char *newAxesStr) {
+    Axes newAxes(newAxesStr);
+    Eigen::Matrix3f P = newAxes.matrix() * axes_.matrix().transpose();
+    centre_ = P * centre_;
+    transform_ = P * transform_ * P.transpose();
+
+    if (hasRbfs_) {
+        if (!P.isDiagonal()) {
+            setLinear(); // an axis permutation would also move the RBF scale
+        } else {
+            // Offsets are a symmetric linspace, so rbf'(u) = -rbf(-u) is the
+            // same RBF with its parameters reversed and negated
+            for (int i = 0; i < 3; i++) {
+                int n = rbfs_[i].paramCount();
+                if (P(i, i) < 0.0f && n > 0) {
+                    float p[RBF::MAX_PARAMS];
+                    for (int k = 0; k < n; k++) {
+                        p[k] = -rbfs_[i].params()[n - 1 - k];
+                    }
+                    rbfs_[i].init(p, n);
+                }
+            }
+        }
+    }
+
+    axes_ = newAxes;
+    return P;
+}
+
 void Sensor::setLinear() {
     hasRbfs_ = false;
     for (int i = 0; i < 3; i++) {

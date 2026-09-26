@@ -58,21 +58,29 @@ constexpr uint8_t NEOPIXEL_COUNT = 1;
 // points up — so the gravity string is the negation of the chip's physical
 // mounting, not a copy of it.
 //
-// First measured empirically 2026-07-10 from raw-axis snapshots in three
-// poses (level / laser down / rolled 90°). That pass read each axis off in
-// isolation and got GRAV_AXES = "+Y-X-Z", which puts the accelerometer's
-// frame 180° rolled relative to the magnetometer's: the up vector the two
-// sensors agree on is inverted, and the orientation matrix comes out
-// mirrored. Symptom (2026-09-19): turn the device from north towards the
-// east and the azimuth runs backwards, 90° reading as 270°; inclination
-// stays correct because it comes from gravity alone. Corrected to
-// "-Y-X+Z" — a 180° roll of the gravity vector about the laser axis —
-// which reproduces azimuth and inclination exactly at every attitude.
-//
-// Full on-device calibration (56-pt ellipsoid + 24-pt alignment + F/B
-// check) is still required; these strings only fix the frame.
-constexpr char MAG_AXES[] = "+Y-X+Z";
-constexpr char GRAV_AXES[] = "-Y-X+Z";
+// History, because both earlier strings looked right on the bench:
+// - 2026-07-10: read off raw-axis snapshots → MAG "+Y-X+Z", GRAV "+Y-X-Z".
+//   The two sensors agreed with each other, but the pair was mirrored:
+//   turning from north to east read 270°, not 90°.
+// - 2026-09-19: GRAV changed to "-Y-X+Z". That un-mirrored the azimuth
+//   while level and upright, but it is a 180° roll of gravity *relative to
+//   the magnetometer*: on a logged real calibration (2026-09-26) the
+//   dip angle wandered by ±40° with attitude, so azimuth was wrong whenever
+//   the device was tilted or rolled. Roll-only checks (calibration Part 2)
+//   cannot see an error about the laser axis, which is how it slipped by.
+// - 2026-09-26: the July pair mirrored in X (both sensors). On the same
+//   calibration data the dip is constant, 67.8° ± 1.1° (UK ≈ 67°), and it
+//   matches the 09-19 mapping when level and upright, which is where the
+//   east = 90° check was done.
+// Test for any future change: dip must be constant across a calibration.
+// Stored calibrations from older mappings are converted at boot
+// (Sensor::reframe in initCalibration). That is exact when both sensors
+// change frame together (July-era files). A 09-19-era file cannot be
+// rescued: its Part 2 roll alignment was fitted against the wrong gravity
+// frame and baked a false inter-sensor rotation into the mag transform, so
+// the device shows RECAL NEEDED at every boot until it is recalibrated.
+constexpr char MAG_AXES[] = "-Y-X+Z";
+constexpr char GRAV_AXES[] = "-Y-X-Z";
 
 // ── System power-off hook ───────────────────────────────────────────
 // Defined in main.cpp: syncs pending data, then drives KILL LOW via

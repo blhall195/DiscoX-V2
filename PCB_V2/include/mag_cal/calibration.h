@@ -145,6 +145,7 @@ class Calibration {
     const Sensor &mag() const { return mag_; }
     const Sensor &grav() const { return grav_; }
     float dipAvg() const { return dipAvg_; }
+    void setDipAvg(float dip) { dipAvg_ = dip; } // 0 disables the dip anomaly check
     bool isCalibrated() const { return mag_.isCalibrated() && grav_.isCalibrated(); }
 
   private:

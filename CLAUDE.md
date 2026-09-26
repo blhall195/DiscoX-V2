@@ -95,13 +95,15 @@ Same math in V1 and V2. Ported from Python; uses Eigen for linear algebra.
   solved via least-squares, back-projected to adjust `mag.centre_`. Menu → Enter Calibration →
   Field Check (F/B).
 
-Note: V2 axis mappings determined empirically 2026-07-10 (mag `"+Y-X+Z"`, grav `"+Y-X-Z"` —
-raw-axis snapshots in three poses, see `PCB_V2/CLAUDE.md`). The grav string was corrected to
-`"-Y-X+Z"` on 2026-09-19: `GRAV_AXES` maps to gravity (down), not to the accelerometer's raw
-specific force, and reading each axis off in isolation left the accel frame 180° rolled
-relative to the mag — which mirrored the azimuth (east read 270°) while leaving inclination
-right. Full on-device V2 calibration is still pending, so the embedded V1 transform/centre
-data remains only roughly valid.
+Note: V2 axis mappings are mag `"-Y-X+Z"`, grav `"-Y-X-Z"` (2026-09-26), settled from a real
+on-device calibration log: with them the dip angle is constant across all 80 points (67.8° ±
+1.1°). The July mapping (`+Y-X+Z`/`+Y-X-Z`) was self-consistent but mirrored (east read 270°);
+the 2026-09-19 quick fix (grav `-Y-X+Z`) un-mirrored level readings but put gravity 180° out
+about the laser axis relative to the mag — dip wandered ±40° and tilted azimuths were wrong.
+Released v2.0.2/v2.0.3 carry that quick fix, and calibrations made under it **must be redone**
+(their Part 2 roll alignment baked in a false rotation between the sensors; the device shows
+RECAL NEEDED at boot). July-era calibrations convert exactly (`Sensor::reframe`). Full history
+in `PCB_V2/include/config.h`.
 
 ## SAP6 BLE GATT Protocol
 

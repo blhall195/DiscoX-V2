@@ -88,6 +88,14 @@ class Sensor {
     /// over one deserialised from flash.
     void setAxes(const char *axesStr) { axes_ = Axes(axesStr); }
 
+    /// Move this calibration to a different axis mapping of the same chip.
+    /// Unlike setAxes(), the fit is carried over exactly: with P the change
+    /// of device frame, centre -> P*centre, transform -> P*T*P^T, and an RBF
+    /// on a flipped axis is mirrored — the result equals a fresh fit of the
+    /// same raw points under the new mapping. RBFs are dropped if the change
+    /// permutes axes (never the case for a sign flip). Returns P.
+    Eigen::Matrix3f reframe(const char *newAxesStr);
+
     const Eigen::Matrix3f &transform() const { return transform_; }
     Eigen::Matrix3f &transformRef() { return transform_; }
     const Eigen::Vector3f &centre() const { return centre_; }

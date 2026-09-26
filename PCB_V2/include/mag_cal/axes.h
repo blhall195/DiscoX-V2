@@ -20,6 +20,9 @@ class Axes {
     /// Return axis string representation (e.g. "-X-Y-Z")
     const char *toString() const { return str_; }
 
+    /// The mapping as a signed permutation matrix: fixAxes(v) == matrix() * v
+    Eigen::Matrix3f matrix() const;
+
   private:
     int8_t indices_[3];    // which sensor axis maps to each device axis (0=X,1=Y,2=Z)
     int8_t polarities_[3]; // +1 or -1 for each device axis

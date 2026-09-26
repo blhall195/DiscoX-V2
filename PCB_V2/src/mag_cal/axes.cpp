@@ -23,6 +23,14 @@ Axes::Axes(const char *axesStr) {
     str_[6] = '\0';
 }
 
+Eigen::Matrix3f Axes::matrix() const {
+    Eigen::Matrix3f m = Eigen::Matrix3f::Zero();
+    for (int i = 0; i < 3; i++) {
+        m(i, indices_[i]) = (float)polarities_[i];
+    }
+    return m;
+}
+
 Eigen::Vector3f Axes::fixAxes(const Eigen::Vector3f &data) const {
     return Eigen::Vector3f(data[indices_[0]] * polarities_[0], data[indices_[1]] * polarities_[1],
                            data[indices_[2]] * polarities_[2]);

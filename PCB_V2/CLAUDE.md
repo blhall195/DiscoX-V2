@@ -352,29 +352,36 @@ only when `syncPendingToFlash()` fails.
 
 ## ⚠ Commissioning still required
 
-1. ~~Determine real `MAG_AXES`/`GRAV_AXES`~~ **done 2026-07-10, grav
-   corrected 2026-09-19**: V2 mappings measured empirically (mag `+Y-X+Z`,
-   grav `+Y-X-Z`) via raw-axis snapshots in three poses; config.h and the
-   embedded `CALIBRATION_JSON` axes both updated.
-   That first pass read each axis off in isolation and so missed that
-   `GRAV_AXES` maps the *gravity* vector (down), not the accelerometer's raw
-   specific force (+1 g along whichever axis points up) — the gravity string
-   is the negation of the chip's physical mounting. The result put the accel
-   frame 180° rolled relative to the mag, the shared up vector came out
-   inverted, and the orientation matrix was mirrored: **turning from north
-   towards the east ran the azimuth backwards, 90° reading as 270°**, while
-   inclination stayed correct (it comes from gravity alone) and roll is
-   never shown. Fixed by `GRAV_AXES = "-Y-X+Z"` — a 180° roll of the gravity
-   vector about the laser axis. Swept against a synthetic field/attitude
-   model this reproduces azimuth and inclination exactly at every attitude;
-   the old string was out by up to 179° (a clean mirror only while level,
-   which is why a desk spin made it look like a pure sign error).
-   `loadCalibration()` now also re-applies the config.h axes over whatever a
-   stored `/calibration.{bin,json}` carried, printing a warning — a file
-   saved in the old frame can no longer shadow a corrected mapping.
-   Still required: full on-device calibration (56-pt ellipsoid + 24-pt
-   alignment + F/B check) — the embedded transform/centre data is still
-   V1's, so `MagErr` and absolute-azimuth error persist until then.
+1. ~~Determine real `MAG_AXES`/`GRAV_AXES`~~ **settled 2026-09-26** from a
+   real calibration log: mag `-Y-X+Z`, grav `-Y-X-Z`. The test
+   that decides it is **dip constancy** — the angle between field and
+   gravity is physical, so across a calibration's 80 points it must not
+   move. With this pair it is 67.8° ± 1.1° (UK ≈ 67°). History (details in
+   config.h): the 2026-07-10 pair `+Y-X+Z`/`+Y-X-Z` was self-consistent but
+   mirrored (north→east read 270°); the 2026-09-19 quick fix `GRAV -Y-X+Z`
+   un-mirrored level, upright readings but rolled gravity 180° about the
+   laser axis relative to the mag, so dip wandered ±40° and tilted/rolled
+   azimuths were wrong. Calibration Part 2 can't catch that (it only rolls
+   about the laser axis, which that error is invisible to — Part 2 still
+   reported 0.14°). Released v2.0.2/v2.0.3 carry the quick fix.
+   `initCalibration()` converts a stored calibration made under an older
+   mapping (`Sensor::reframe`: centre → P·c, transform → P·T·Pᵀ, RBFs
+   mirrored on flipped axes — verified offline equal to a fresh fit to
+   1e-7). When both sensors change frame together (July-era file) that is
+   exact and it is re-saved. When they move *relative* to each other
+   (09-19-era file, i.e. anything calibrated on v2.0.2/v2.0.3) it is not:
+   Part 2's roll alignment fitted a false inter-sensor rotation (52.9° on
+   the 2026-09-26 log) into the mag transform, and re-running Part 2 alone
+   does not remove it (tested offline). Such a file is converted in RAM but
+   never saved, `dip_avg` is zeroed (disables the dip anomaly check), and
+   boot shows **RECAL NEEDED** every time until a full recalibration.
+   Note Part 2's accuracy figure is blind to this — the broken calibration
+   scored 0.15° vs 0.29° for the correct one. `c` on serial prints the
+   calibration axes and the **live dip**, which should sit near the local
+   dip (UK ≈ 67°) however the device is held.
+   Still worth a physical check after any mapping change: level, north→east
+   should read ~90°; the same bearing aimed flat and steeply tilted should
+   read the same azimuth.
    **Serial debug commands** (normal mode only — the menu/cal/snake loops
    short-circuit before the handler): `r` prints one `RAW mag … | acc …`
    line (chip-frame values before `Axes::fixAxes`, for reading the mapping
@@ -384,13 +391,9 @@ only when `syncPendingToFlash()` fails.
    sent/acked/resend/failed-send counters) — the view for verifying the
    reading drain on the bench.
    Note the axes strings are ALSO stored inside saved calibrations
-   (`/calibration.{bin,json}`). Since 2026-09-19 the compiled-in strings win:
-   `loadCalibration()` overwrites the loaded ones and warns on serial. Boot
-   serial still prints `Mag axes:`/`Grav axes:` showing what is in force. A
-   calibration fitted under a different mapping is stale regardless — its
-   ellipsoid was fitted in the old frame — so re-calibrate
-   (`calibration_mode.cpp` constructs from `MAG_AXES`/`GRAV_AXES`) or delete
-   the stored files.
+   (`/calibration.{bin,json}`); a mismatch is converted, not overwritten —
+   see item 1. Boot serial prints `Mag axes:`/`Grav axes:` showing what is
+   in force.
 
    **Buzzer test console** (2026-07-15, `handleBuzzerTestLine` in
    `main.cpp`): lines starting with `>` are buffered until `\n` and
@@ -485,9 +488,11 @@ only when `syncPendingToFlash()` fails.
 - 2026-07-09: **USB drive mode added** (128 KB FAT12 partition on internal
   flash + TinyUSB MSC — see the "USB drive mode" section). Builds clean
   (RAM 10.4%, flash 57.8% of the new 668 KB app cap).
-- 2026-09-19: **azimuth mirroring fixed** — `GRAV_AXES` `+Y-X-Z` → `-Y-X+Z`
-  (commissioning item #1); stored calibrations no longer shadow the
-  compiled-in axis strings.
+- 2026-09-26: **axis mappings settled** — mag `-Y-X+Z`, grav `-Y-X-Z`, from
+  dip constancy on a real calibration log; stored calibrations converted
+  exactly at boot (commissioning item #1). Supersedes the 09-19 quick fix.
+- 2026-09-19: azimuth mirroring quick fix — `GRAV_AXES` `+Y-X-Z` → `-Y-X+Z`
+  (later found to roll gravity 180° relative to the mag; see item #1).
 - 2026-07-10: **axis mappings determined** (mag `+Y-X+Z`, grav `+Y-X-Z` —
   commissioning item #1) and the remaining on-device features exercised in a
   full test pass: buzzer sound vocabulary, disco/WS2812 (the temporary LED

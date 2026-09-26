@@ -34,15 +34,14 @@
 // ── Embedded calibration data ──────────────────────────────────────
 // From V1's calibration_dict.json (github.com/blhall195/Mr_Zappy) —
 // loaded at startup.
-// Axes updated to the V2 mappings (2026-07-10, grav corrected 2026-09-19 —
-// see config.h); the transform/centre/rbf data is still V1's and only
+// Axes are the current V2 mappings (2026-09-26 — see config.h); the
+// transform/centre/rbf data is still V1's and only
 // roughly valid — expect MagErr until a full V2 on-device calibration
-// replaces this fallback. loadCalibration() re-applies the config.h strings
-// on top of whatever is loaded, so these two only have to stay in step for
-// readability.
+// replaces this fallback. Keep the two strings equal to config.h's, or
+// initCalibration() will "convert" this placeholder at every boot.
 static const char CALIBRATION_JSON[] PROGMEM = R"({
   "mag": {
-    "axes": "+Y-X+Z",
+    "axes": "-Y-X+Z",
     "transform": [[0.0225258, -0.000348105, -0.000709316],
                    [0.000171691, 0.0221358, -0.000679377],
                    [0.000447533, -0.000145672, 0.0225338]],
@@ -55,7 +54,7 @@ static const char CALIBRATION_JSON[] PROGMEM = R"({
   },
   "dip_avg": 68.9221,
   "grav": {
-    "axes": "-Y-X+Z",
+    "axes": "-Y-X-Z",
     "transform": [[0.101936, -0.00167875, 0.000143624],
                    [0.0015862, 0.10164, 0.000604115],
                    [0.000153489, -0.000228592, 0.102199]],
@@ -98,6 +97,7 @@ bool laserOk = false;
 bool bleOk = false;
 bool calOk = false;
 bool calFromFlash = false; // true = loaded from flash, false = PROGMEM fallback
+bool calNeedsRedo = false; // stored calibration predates the 2026-09-26 axis fix
 bool flashOk = false;
 
 // ── Storage-fault recovery ──────────────────────────────────────────
@@ -1154,6 +1154,21 @@ static void readSensorsUpdate(uint32_t now) {
             Serial.println(F("--- /config.json ---"));
             if (!configMgr.printConfig(Serial)) {
                 Serial.println(F("(no config file — running on defaults)"));
+            }
+            if (calOk) {
+                // Live dip is the axis-mapping health check: the field/gravity
+                // angle is physical, so it must stay put however the device
+                // is held (config.h "Calibration axis mappings")
+                Serial.print(F("Calibration axes: mag "));
+                Serial.print(calibration.mag().axes().toString());
+                Serial.print(F(" grav "));
+                Serial.print(calibration.grav().axes().toString());
+                Serial.print(F(" | dip_avg "));
+                Serial.print(calibration.dipAvg(), 2);
+                Serial.print(F(" | live dip "));
+                Serial.println(calibration.getDip(Eigen::Vector3f(lastMagX, lastMagY, lastMagZ),
+                                                  Eigen::Vector3f(lastAccX, lastAccY, lastAccZ)),
+                               2);
             }
         } else if (c == 'u' || c == 'U') {
             // Clean bootloader entry for host-driven reflash. The 1200bps
@@ -2637,6 +2652,26 @@ static void initFlash() {
     Serial.println();
 }
 
+// Persist a calibration converted to new axis mappings (initCalibration), so
+// the conversion runs once and the stored files carry the current axes.
+// Buffers static: 4 KB loop-task stack (see CalibrationMode::saveCalibration).
+static void saveConvertedCalibration() {
+    JsonDocument doc;
+    calibration.toJson(doc.to<JsonObject>());
+    static char buf[2048];
+    size_t required = measureJson(doc);
+    if (required == 0 || required >= sizeof(buf)) {
+        Serial.println(F("  Converted calibration too large to save — converting each boot"));
+        return;
+    }
+    size_t len = serializeJson(doc, buf, sizeof(buf));
+    static MagCal::CalibrationBinary bin;
+    calibration.toBinary(bin);
+    bool ok = configMgr.saveCalibrationJson(buf, len) && configMgr.saveCalibrationBinary(bin);
+    Serial.println(ok ? F("  Converted calibration saved.")
+                      : F("  Converted calibration NOT saved — converting each boot"));
+}
+
 static void initCalibration() {
     Serial.print(F("Calibration: "));
 
@@ -2692,11 +2727,11 @@ static void initCalibration() {
     calOk = loaded;
 
     if (calOk) {
-        // The axis strings travel inside saved calibrations, so a file
-        // written before a mapping was corrected would otherwise shadow
-        // config.h forever (the 2026-09-19 mirrored-azimuth fix). The
-        // mapping describes the board, not the calibration run — take it
-        // from the firmware and say so when the file disagreed.
+        // The axis strings travel inside saved calibrations. When the
+        // firmware's mapping has been corrected since the file was written,
+        // carry the fit over into the new frame (exact for the ellipsoid —
+        // see Sensor::reframe) and save it back, rather than reinterpreting
+        // old-frame numbers under new axes.
         bool magAxesStale = strcmp(calibration.mag().axes().toString(), MAG_AXES) != 0;
         bool gravAxesStale = strcmp(calibration.grav().axes().toString(), GRAV_AXES) != 0;
         if (magAxesStale || gravAxesStale) {
@@ -2704,10 +2739,24 @@ static void initCalibration() {
             Serial.print(calibration.mag().axes().toString());
             Serial.print(F(" / "));
             Serial.print(calibration.grav().axes().toString());
-            Serial.println(F(") differ from firmware — using firmware axes."));
-            Serial.println(F("  Re-run calibration: the fit was made in the old frame."));
-            calibration.mag().setAxes(MAG_AXES);
-            calibration.grav().setAxes(GRAV_AXES);
+            Serial.println(F(") differ from firmware — converting calibration."));
+            Eigen::Matrix3f pMag = calibration.mag().reframe(MAG_AXES);
+            Eigen::Matrix3f pGrav = calibration.grav().reframe(GRAV_AXES);
+            if (!pMag.isApprox(pGrav)) {
+                // The sensors moved relative to each other (a calibration
+                // made under the 2026-09-19 mapping). The ellipsoid converts
+                // exactly, but Part 2's roll alignment was fitted against a
+                // gravity frame rolled 180° from the truth and baked a false
+                // rotation between the sensors into the mag transform (52.9°
+                // on the 2026-09-26 log) that no frame change can undo — only
+                // a full recalibration. Keep running on the converted data,
+                // but don't save it, so every boot warns until then.
+                calibration.setDipAvg(0.0f); // stored mean dip is meaningless
+                calNeedsRedo = true;
+                Serial.println(F("  Calibration predates the axis fix — RECALIBRATE."));
+            } else if (flashOk && calFromFlash) {
+                saveConvertedCalibration(); // exact: both sensors moved together
+            }
         }
 
         Serial.print(F("  Mag axes:  "));
@@ -2726,6 +2775,28 @@ static void initCalibration() {
         Serial.print(ctx.config.emaAlphaMoving, 2);
         Serial.print(F(", stability buf="));
         Serial.println(ctx.config.stabilityBufferLength);
+
+        if (calNeedsRedo && dispOk) {
+            display.blankScreen();
+            auto &disp = display.getDisplay();
+            disp.setTextColor(SH110X_WHITE);
+            disp.setTextSize(2);
+            disp.setCursor(0, 10);
+            disp.println(F("RECAL"));
+            disp.println(F("NEEDED"));
+            disp.setTextSize(1);
+            disp.println();
+            disp.println(F("Firmware fixed the"));
+            disp.println(F("sensor axes; this"));
+            disp.println(F("calibration is from"));
+            disp.println(F("the old ones. Tilted"));
+            disp.println(F("shots are unreliable"));
+            disp.println(F("until recalibrated."));
+            disp.display();
+            disco.setRed();
+            delay(5000);
+            disco.turnOff();
+        }
 
         // Warn user if calibration came from PROGMEM (stale compile-time data)
         if (!calFromFlash && dispOk) {
