@@ -1,6 +1,42 @@
 #include "calibration_mode.h"
 #include "math_utils.h"
+#include <algorithm>
 #include <math.h>
+
+namespace {
+// Median and robust sigma (1.4826 x MAD) of x over the kept entries
+void robustStats(const std::vector<float> &x, const std::vector<bool> &keep, float &med, float &sigma) {
+    std::vector<float> v;
+    for (size_t i = 0; i < x.size(); i++) {
+        if (keep[i]) {
+            v.push_back(x[i]);
+        }
+    }
+    auto median = [](std::vector<float> w) {
+        size_t n = w.size() / 2;
+        std::nth_element(w.begin(), w.begin() + n, w.end());
+        return w[n];
+    };
+    med = median(v);
+    for (float &a : v) {
+        a = fabsf(a - med);
+    }
+    sigma = 1.4826f * median(v);
+}
+
+float sdOf(const std::vector<float> &x) {
+    double m = 0.0, s = 0.0;
+    for (float a : x) {
+        m += a;
+    }
+    m /= (double)x.size();
+    for (float a : x) {
+        s += (a - m) * (a - m);
+    }
+    return (float)sqrt(s / (double)x.size());
+}
+
+} // namespace
 
 // ── Initialization ──────────────────────────────────────────────────
 
@@ -300,9 +336,15 @@ void CalibrationMode::updateCollecting() {
 
             // Timeout — accept the current EMA-smoothed reading if we've waited too
             // long
+            // Timeout — the device never held still long enough. This used to
+            // record the EMA reading anyway, feeding an unsettled point to the
+            // fit unmarked; now the attempt is dropped and the user retries.
             if (calTimeoutMs_ > 0 && (now - captureStart_) >= calTimeoutMs_) {
-                Serial.println(F("Stability timeout — accepting EMA reading"));
-                acceptPoint(emaMag_, emaGrav_);
+                Serial.println(F("Stability timeout — point not taken, press FIRE to retry"));
+                waitingForStable_ = false;
+                settleStart_ = 0;
+                disco_->turnOff();
+                beepTriple();
             }
         }
     }
@@ -796,6 +838,14 @@ void CalibrationMode::showResultsScreen() {
         d.setCursor(0, 40);
         snprintf(buf, sizeof(buf), "Grav: %.5f", (double)resultGravAcc_);
         d.println(buf);
+        d.setCursor(0, 52);
+        snprintf(buf, sizeof(buf), "Dip spread: %.1f deg", (double)resultDipSpread_);
+        d.println(buf);
+        if (rejectedCount_ > 0) {
+            d.setCursor(0, 62);
+            snprintf(buf, sizeof(buf), "Dropped %d bad pt%s", rejectedCount_, rejectedCount_ == 1 ? "" : "s");
+            d.println(buf);
+        }
 
         Serial.print(F("Results — Mag: "));
         Serial.print(resultMagAcc_, 4);
@@ -820,6 +870,18 @@ void CalibrationMode::showResultsScreen() {
         d.setTextSize(1);
         d.setCursor(0, 46);
         d.println(F("< 0.5 is acceptable"));
+        if (envWarn_) {
+            // Accuracy alone can't see this — say it in words
+            d.setCursor(0, 60);
+            d.println(F("! Field differs from"));
+            d.println(F("  Part 1: metal near?"));
+            d.println(F("  Redo both parts in"));
+            d.println(F("  one clear spot."));
+        } else {
+            d.setCursor(0, 60);
+            snprintf(buf, sizeof(buf), "Dip spread: %.1f deg", (double)resultDipSpread_);
+            d.println(buf);
+        }
 
         Serial.print(F("Results — Accuracy: "));
         Serial.print(resultAccuracy_, 3);
@@ -895,10 +957,23 @@ void CalibrationMode::calculateEllipsoid() {
         return;
     }
 
+    rejectEllipsoidOutliers();
+
     // Set field characteristics for anomaly detection
     cal_->setFieldCharacteristics(magArray_, gravArray_);
 
+    std::vector<float> dipsDeg(magArray_.size());
+    for (size_t i = 0; i < magArray_.size(); i++) {
+        dipsDeg[i] = cal_->getDip(magArray_[i], gravArray_[i]);
+    }
+    resultDipSpread_ = sdOf(dipsDeg);
+    Serial.print(F("  Dip spread: "));
+    Serial.print(resultDipSpread_, 2);
+    Serial.print(F(" deg, points dropped: "));
+    Serial.println(rejectedCount_);
+
     uint32_t dt = millis() - t0;
+
     Serial.print(F("Ellipsoid fit done in "));
     Serial.print(dt);
     Serial.println(F(" ms"));
@@ -906,6 +981,94 @@ void CalibrationMode::calculateEllipsoid() {
     Serial.println(resultMagAcc_, 4);
     Serial.print(F("  Grav uniformity: "));
     Serial.println(resultGravAcc_, 4);
+}
+
+// Drop Part 1 points that disagree with the rest and refit. A point is scored
+// on two physical invariants: its distance from the fitted unit sphere (field
+// strength) and its dip angle (field-to-gravity angle), each against the
+// median and robust spread of this calibration's own points — so it adapts to
+// whatever the local field is, anywhere in the world. Thresholds were tuned
+// offline on the 2026-09-26 logs with injected disturbances: no clean point
+// dropped, and 5-10% disturbances cut from ~1.8 deg to ~0.3 deg worst-case
+// azimuth error. Never drops more than 15% (coverage), and keeps the plain
+// fit if a refit degenerates.
+void CalibrationMode::rejectEllipsoidOutliers() {
+    constexpr float Z_MAX = 4.0f;
+    constexpr float RADIUS_FLOOR = 0.015f; // 1.5% of field strength
+    constexpr float DIP_FLOOR = 2.0f;      // degrees
+    const size_t n = magArray_.size();
+    const size_t maxDrop = n * 15 / 100;
+
+    std::vector<bool> keep(n, true);
+    std::vector<float> radius(n), dip(n);
+    rejectedCount_ = 0;
+
+    for (int pass = 0; pass < 2; pass++) {
+        for (size_t i = 0; i < n; i++) {
+            radius[i] = cal_->mag().apply(magArray_[i]).norm() - 1.0f;
+            dip[i] = cal_->getDip(magArray_[i], gravArray_[i]);
+        }
+        float rMed, rSig, dMed, dSig;
+        robustStats(radius, keep, rMed, rSig);
+        robustStats(dip, keep, dMed, dSig);
+        float rLim = fmaxf(Z_MAX * rSig, RADIUS_FLOOR);
+        float dLim = fmaxf(Z_MAX * dSig, DIP_FLOOR);
+
+        // score > 1 = outlier; keep only the worst maxDrop if there are more
+        std::vector<float> score(n);
+        for (size_t i = 0; i < n; i++) {
+            score[i] = fmaxf(fabsf(radius[i] - rMed) / rLim, fabsf(dip[i] - dMed) / dLim);
+        }
+        std::vector<size_t> order(n);
+        for (size_t i = 0; i < n; i++) {
+            order[i] = i;
+        }
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return score[a] > score[b]; });
+        std::vector<bool> newKeep(n, true);
+        for (size_t k = 0; k < maxDrop && score[order[k]] > 1.0f; k++) {
+            newKeep[order[k]] = false;
+        }
+        if (newKeep == keep) {
+            break;
+        }
+
+        std::vector<Eigen::Vector3f> m, g;
+        for (size_t i = 0; i < n; i++) {
+            if (newKeep[i]) {
+                m.push_back(magArray_[i]);
+                g.push_back(gravArray_[i]);
+            }
+        }
+        static MagCal::Calibration previous; // static: ~0.5 KB, 4 KB loop stack
+        previous = *cal_;
+        auto refit = cal_->fitEllipsoid(m, g);
+        if (refit.first < 0.0f || refit.second < 0.0f) {
+            *cal_ = previous; // refit degenerated — keep the fit we had
+            break;
+        }
+        keep = newKeep;
+        resultMagAcc_ = refit.first;
+        resultGravAcc_ = refit.second;
+    }
+
+    std::vector<Eigen::Vector3f> m, g;
+    for (size_t i = 0; i < n; i++) {
+        if (keep[i]) {
+            m.push_back(magArray_[i]);
+            g.push_back(gravArray_[i]);
+        } else {
+            rejectedCount_++;
+            Serial.print(F("  Outlier dropped: point "));
+            Serial.print(i);
+            Serial.print(F(" (field "));
+            Serial.print(radius[i] * 100.0f, 2);
+            Serial.print(F("%, dip "));
+            Serial.print(dip[i], 2);
+            Serial.println(F(" deg)"));
+        }
+    }
+    magArray_ = m;
+    gravArray_ = g;
 }
 
 void CalibrationMode::calculateAlignment() {
@@ -955,10 +1118,41 @@ void CalibrationMode::calculateAlignment() {
     Serial.print(resultAccuracy_, 3);
     Serial.println(F(" deg"));
 
-    // Update field characteristics
-    cal_->setFieldCharacteristics(magArray_, gravArray_);
+    // Field references (strength + dip, for CAL? and the anomaly checks)
+    // come from Part 1's 56 points spread over the whole sphere; Part 2's
+    // 24 near-level shots used to overwrite them. Rotations don't change
+    // either, so Part 1's values stay valid through the alignment. Only
+    // fill them from Part 2 if the stored calibration has none.
+    if (cal_->mag().fieldAvg() <= 0.0f || cal_->dipAvg() == 0.0f) {
+        cal_->setFieldCharacteristics(magArray_, gravArray_);
+    }
+
+    // Environment check: Part 2 must see the same field as Part 1. A
+    // 2026-09-26 calibration done half a metre from a radiator read 9%
+    // stronger and 3 deg shallower in Part 2 while reporting a clean accuracy
+    // figure. Relative to Part 1, so it holds anywhere in the world.
+    std::vector<float> fields(magArray_.size()), dipsDeg(magArray_.size());
+    for (size_t i = 0; i < magArray_.size(); i++) {
+        fields[i] = cal_->mag().apply(magArray_[i]).norm();
+        dipsDeg[i] = cal_->getDip(magArray_[i], gravArray_[i]);
+    }
+    std::vector<bool> all(magArray_.size(), true);
+    float fieldMed, dipMed, unused;
+    robustStats(fields, all, fieldMed, unused);
+    robustStats(dipsDeg, all, dipMed, unused);
+    envFieldRatio_ = fieldMed; // Part 1 fits the field to the unit sphere
+    envDipDev_ = (cal_->dipAvg() != 0.0f) ? dipMed - cal_->dipAvg() : 0.0f;
+    envWarn_ = fabsf(envFieldRatio_ - 1.0f) > 0.03f || fabsf(envDipDev_) > 2.0f;
+    resultDipSpread_ = sdOf(dipsDeg);
+    Serial.print(F("  Part 2 vs Part 1: field x"));
+    Serial.print(envFieldRatio_, 3);
+    Serial.print(F(", dip "));
+    Serial.print(envDipDev_, 2);
+    Serial.print(F(" deg"));
+    Serial.println(envWarn_ ? F("  — DIFFERENT ENVIRONMENT") : F(""));
 
     uint32_t dt = millis() - t0;
+
     Serial.print(F("Alignment fit done in "));
     Serial.print(dt);
     Serial.println(F(" ms"));

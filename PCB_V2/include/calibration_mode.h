@@ -136,6 +136,12 @@ class CalibrationMode {
     float resultMagAcc_ = 0.0f;
     float resultGravAcc_ = 0.0f;
     float resultAccuracy_ = 0.0f;
+    int rejectedCount_ = 0;       // Part 1: points dropped as outliers
+    float resultDipSpread_ = 0.0f; // SD of per-point dip (deg) — the axis/
+                                   // environment health check
+    float envFieldRatio_ = 1.0f;  // Part 2 field / Part 1 field
+    float envDipDev_ = 0.0f;      // Part 2 dip - Part 1 dip (deg)
+    bool envWarn_ = false;        // Part 2 done somewhere magnetically different
 
     // Negative uniformity = fitEllipsoid rejected the data as degenerate;
     // the results screen then only offers discard, never save.
@@ -238,6 +244,7 @@ class CalibrationMode {
 
     // ── Calculation ──
     void calculateEllipsoid();
+    void rejectEllipsoidOutliers();
     void calculateAlignment();
     bool saveCalibration();
 };

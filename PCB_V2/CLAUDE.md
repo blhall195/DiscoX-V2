@@ -191,6 +191,32 @@ filesystem that mounts and reads but refuses every commit), the drain serves
 readings straight from RAM rather than stranding them. That path is reachable
 only when `syncPendingToFlash()` fails.
 
+## Calibration quality checks (2026-09-26)
+
+Derived from per-point calibration logs captured on 2026-09-26 (a temporary
+CALLOG1/2.CSV writer to the USB drive, since removed; the offline analysis
+replayed the fit in numpy and matched the device to 1e-6).
+
+What the calibration now does:
+- **Outlier rejection (Part 1)** — `rejectEllipsoidOutliers()`: each point
+  scored on field strength (distance from the fitted sphere) and dip,
+  against the median and robust spread of *this* calibration's points, so it
+  works at any latitude. >4σ (floors 1.5% / 2°) is dropped, refit, at most
+  15% of points, falls back to the plain fit if a refit degenerates. Tuned
+  offline with injected disturbances: nothing dropped from clean data; 5-10%
+  disturbances cut worst-case azimuth error from ~1.8° to ~0.3°.
+- **Field references from Part 1** — Part 2 used to overwrite field
+  strength/dip references from its 24 near-level shots.
+- **Part 2 environment check** — Part 2's median field and dip must match
+  Part 1 (±3%, ±2°), else the results screen says so. A Part 2 done half a
+  metre from a radiator read +9% / −3° with a clean 0.18° accuracy.
+- **Dip spread** on both results screens. Part 2's accuracy figure only
+  sees rotation about the laser axis; it missed both the axis-mapping bug
+  and the radiator. Typical clean values (outdoors, UK): Part 1 ≈ 1° (it
+  is measured before Part 2 aligns the two sensors), Part 2 ≈ 0.1°; the
+  final calibration held dip to 67.2° ± 0.12° over all 80 points.
+- **Timeout** no longer records an unsettled point: triple beep, retry.
+
 ## Gotchas (inherited + new)
 
 - **LDJ-100 signal quality is inverted from its own manual.** The manual says
