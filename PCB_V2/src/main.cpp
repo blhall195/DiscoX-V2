@@ -222,11 +222,18 @@ static constexpr uint32_t ACCEL_TOAST_REPEAT_MS = 30000; // re-nag interval whil
 static float lastDistance = 0;
 
 // ── Boot-time field strength sanity check ────────────────────────────
-// After N sensor readings, compare calibrated field strength to expected.
-// Catches stale calibration AND sensor remagnetization.
-static constexpr uint8_t FIELD_CHECK_AFTER_SAMPLES = 20; // let EMA settle
-static constexpr float FIELD_CHECK_TOLERANCE = 0.15f;    // 15%
-static uint8_t fieldCheckCounter = 0;
+// Compare the calibrated field strength, averaged over a stretch of still
+// samples, to the calibration's expected value. Catches stale calibration AND
+// sensor remagnetization. A single raw sample (the original check) tripped on
+// noise or on the unit being waved past something magnetic at switch-on; the
+// per-shot MagErr check (±2%) still catches anything subtler.
+static constexpr uint16_t FIELD_CHECK_WARMUP_SAMPLES = 20;  // skip the first 200 ms
+static constexpr uint16_t FIELD_CHECK_STILL_SAMPLES = 100;  // ~1 s of still readings
+static constexpr uint16_t FIELD_CHECK_GIVE_UP_SAMPLES = 1500; // ~15 s: never held still
+static constexpr float FIELD_CHECK_TOLERANCE = 0.20f;       // 20%
+static uint16_t fieldCheckCounter = 0;
+static uint16_t fieldCheckStillCount = 0;
+static float fieldCheckSum = 0.0f;
 static bool fieldCheckDone = false;
 
 // ── Display deadband (prevents ±0.1 flicker when stationary) ────────
@@ -1202,30 +1209,45 @@ static void readSensorsUpdate(uint32_t now) {
         Eigen::Vector3f rawGrav(lastAccX, lastAccY, lastAccZ);
         sensorMgr.update(rawMag, rawGrav, deviceMoving);
 
-        // Boot-time sanity check: after EMA settles, verify field strength
-        if (!fieldCheckDone && ++fieldCheckCounter >= FIELD_CHECK_AFTER_SAMPLES) {
+        // Boot-time sanity check: average field strength over still samples
+        float expectedMag = calibration.mag().fieldAvg();
+        if (!fieldCheckDone && expectedMag <= 0.0f) {
+            fieldCheckDone = true; // no reference data to check against
+        }
+        if (!fieldCheckDone && ++fieldCheckCounter > FIELD_CHECK_WARMUP_SAMPLES) {
+            if (deviceMoving) {
+                // Only a continuous still stretch counts
+                fieldCheckStillCount = 0;
+                fieldCheckSum = 0.0f;
+            } else {
+                fieldCheckSum += calibration.mag().getFieldStrength(rawMag);
+                fieldCheckStillCount++;
+            }
+            if (fieldCheckCounter >= FIELD_CHECK_GIVE_UP_SAMPLES) {
+                fieldCheckDone = true;
+                Serial.println(F("Field check: skipped (device never held still)"));
+            }
+        }
+        if (!fieldCheckDone && fieldCheckStillCount >= FIELD_CHECK_STILL_SAMPLES) {
             fieldCheckDone = true;
-            float expectedMag = calibration.mag().fieldAvg();
-            if (expectedMag > 0.0f) {
-                float actualMag = calibration.mag().getFieldStrength(rawMag);
-                float deviation = fabsf(actualMag - expectedMag) / expectedMag;
-                Serial.print(F("Field check: expected="));
-                Serial.print(expectedMag, 2);
-                Serial.print(F(" actual="));
-                Serial.print(actualMag, 2);
-                Serial.print(F(" dev="));
-                Serial.print(deviation * 100.0f, 1);
-                Serial.println(F("%"));
-                if (deviation > FIELD_CHECK_TOLERANCE) {
-                    Serial.println(F("WARNING: field strength deviation >15% — "
-                                     "calibration may be invalid"));
-                    if (dispOk) {
-                        display.updateDistanceText("CAL?");
-                        display.refresh();
-                        disco.setRed();
-                        delay(3000);
-                        disco.turnOff();
-                    }
+            float actualMag = fieldCheckSum / fieldCheckStillCount;
+            float deviation = fabsf(actualMag - expectedMag) / expectedMag;
+            Serial.print(F("Field check: expected="));
+            Serial.print(expectedMag, 2);
+            Serial.print(F(" actual="));
+            Serial.print(actualMag, 2);
+            Serial.print(F(" dev="));
+            Serial.print(deviation * 100.0f, 1);
+            Serial.println(F("%"));
+            if (deviation > FIELD_CHECK_TOLERANCE) {
+                Serial.println(F("WARNING: field strength deviation >20% — "
+                                 "calibration may be invalid"));
+                if (dispOk) {
+                    display.updateDistanceText("CAL?");
+                    display.refresh();
+                    disco.setRed();
+                    delay(3000);
+                    disco.turnOff();
                 }
             }
         }
