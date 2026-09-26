@@ -163,57 +163,43 @@ bool ConfigManager::loadConfig(Config &cfg) {
         return false;
     }
 
-    // Keep this list in sync with the doc[...] keys in saveConfig() below.
-    // A stored file written by older firmware lacks newly added keys; flag
-    // it so boot can re-save and surface the new settings on the USB drive.
-    static const char *const kExpectedKeys[] = {
-        "mag_tolerance", "grav_tolerance", "dip_tolerance", "anomaly_detection",
-        "stability_tolerance", "stability_buffer_length", "ema_alpha_stable",
-        "ema_alpha_moving", "leg_angle_tolerance", "cartesian_tolerance",
-        "laser_distance_offset", "cal_mag_consistency", "cal_grav_consistency",
-        "cal_buffer_length", "cal_settle_ms", "cal_ema_alpha", "cal_timeout_ms",
-        "auto_shutdown_timeout", "laser_timeout", "laser_wibble", "laser_shots",
-        "laser_sq_limit", "laser_spread_limit_mm", "measure_from_front",
-        "screen_brightness", "splays_enabled", "ble_name"};
+    // config.json carries only the settings a user might want to change.
+    // Everything else in Config (filter coefficients, calibration capture
+    // tuning, anomaly thresholds, laser validation, geometry) stays at its
+    // Defaults:: value — firmware constants, deliberately not user-editable.
+    //
+    // Keep kUserKeys in sync with the doc[...] keys in saveConfig() below.
+    // A file lacking one (older firmware) or still carrying a retired key is
+    // flagged so boot re-saves it: new settings appear with their defaults,
+    // retired ones disappear, and user values are kept.
+    static const char *const kUserKeys[] = {
+        "ble_name",         "screen_brightness", "auto_shutdown_timeout", "laser_timeout",
+        "measure_from_front", "splays_enabled",  "laser_wibble",          "anomaly_detection",
+        "cartesian_tolerance", "steady_tolerance"};
+    static const char *const kRetiredKeys[] = {
+        "mag_tolerance", "grav_tolerance", "dip_tolerance", "stability_tolerance",
+        "stability_buffer_length", "ema_alpha_stable", "ema_alpha_moving", "filter_tuning",
+        "leg_angle_tolerance", "laser_distance_offset", "cal_mag_consistency",
+        "cal_grav_consistency", "cal_buffer_length", "cal_settle_ms", "cal_ema_alpha",
+        "cal_timeout_ms", "laser_shots", "laser_sq_limit", "laser_spread_limit_mm"};
     loadMissing_ = false;
-    for (const char *key : kExpectedKeys) {
-        if (doc[key].isNull()) {
-            loadMissing_ = true;
-            break;
-        }
+    for (const char *key : kUserKeys) {
+        loadMissing_ |= doc[key].isNull();
+    }
+    for (const char *key : kRetiredKeys) {
+        loadMissing_ |= !doc[key].isNull();
     }
 
-    cfg.magTolerance = doc["mag_tolerance"] | Defaults::magTolerance;
-    cfg.gravTolerance = doc["grav_tolerance"] | Defaults::gravTolerance;
-    cfg.dipTolerance = doc["dip_tolerance"] | Defaults::dipTolerance;
-    cfg.anomalyDetection = doc["anomaly_detection"] | Defaults::anomalyDetection;
-    cfg.stabilityTolerance = doc["stability_tolerance"] | Defaults::stabilityTolerance;
-    cfg.stabilityBufferLength = doc["stability_buffer_length"] | (int)Defaults::stabilityBufferLength;
-    cfg.emaAlphaStable = doc["ema_alpha_stable"] | Defaults::emaAlphaStable;
-    cfg.emaAlphaMoving = doc["ema_alpha_moving"] | Defaults::emaAlphaMoving;
-    cfg.legAngleTolerance = doc["leg_angle_tolerance"] | Defaults::legAngleTolerance;
-    cfg.cartesianTolerance = doc["cartesian_tolerance"] | Defaults::cartesianTolerance;
-    cfg.laserDistanceOffset = doc["laser_distance_offset"] | Defaults::laserDistanceOffset;
-    cfg.calMagConsistency = doc["cal_mag_consistency"] | Defaults::calMagConsistency;
-    cfg.calGravConsistency = doc["cal_grav_consistency"] | Defaults::calGravConsistency;
-    cfg.calBufferLength = doc["cal_buffer_length"] | (int)Defaults::calBufferLength;
-    cfg.calSettleMs = doc["cal_settle_ms"] | (int)Defaults::calSettleMs;
-    cfg.calEmaAlpha = doc["cal_ema_alpha"] | Defaults::calEmaAlpha;
-    cfg.calTimeoutMs = doc["cal_timeout_ms"] | (int)Defaults::calTimeoutMs;
+    cfg = Config(); // firmware constants for everything not read below
+    cfg.screenBrightness = doc["screen_brightness"] | (int)Defaults::screenBrightness;
     cfg.autoShutdownTimeout = doc["auto_shutdown_timeout"] | Defaults::autoShutdownTimeout;
     cfg.laserTimeout = doc["laser_timeout"] | Defaults::laserTimeout;
-    cfg.laserWibble = doc["laser_wibble"] | Defaults::laserWibble;
-    cfg.laserShots = doc["laser_shots"] | (int)Defaults::laserShots;
-    if (cfg.laserShots < 1) {
-        cfg.laserShots = 1;
-    } else if (cfg.laserShots > Defaults::laserShotsMax) {
-        cfg.laserShots = Defaults::laserShotsMax;
-    }
-    cfg.laserSqLimit = doc["laser_sq_limit"] | (int)Defaults::laserSqLimit;
-    cfg.laserSpreadLimitMm = doc["laser_spread_limit_mm"] | (int)Defaults::laserSpreadLimitMm;
     cfg.measureFromFront = doc["measure_from_front"] | Defaults::measureFromFront;
-    cfg.screenBrightness = doc["screen_brightness"] | (int)Defaults::screenBrightness;
     cfg.splaysEnabled = doc["splays_enabled"] | Defaults::splaysEnabled;
+    cfg.laserWibble = doc["laser_wibble"] | Defaults::laserWibble;
+    cfg.anomalyDetection = doc["anomaly_detection"] | Defaults::anomalyDetection;
+    cfg.cartesianTolerance = doc["cartesian_tolerance"] | Defaults::cartesianTolerance;
+    cfg.stabilityTolerance = doc["steady_tolerance"] | Defaults::stabilityTolerance;
 
     const char *rawName = doc["ble_name"] | Defaults::bleName;
     // Strip SAP6_ prefix if user included it — we always prepend it ourselves
@@ -231,33 +217,16 @@ bool ConfigManager::saveConfig(const Config &cfg) {
 
     JsonDocument doc;
 
-    // ── Settings values ──
-    doc["mag_tolerance"] = cfg.magTolerance;
-    doc["grav_tolerance"] = cfg.gravTolerance;
-    doc["dip_tolerance"] = cfg.dipTolerance;
-    doc["anomaly_detection"] = cfg.anomalyDetection;
-    doc["stability_tolerance"] = cfg.stabilityTolerance;
-    doc["stability_buffer_length"] = (int)cfg.stabilityBufferLength;
-    doc["ema_alpha_stable"] = cfg.emaAlphaStable;
-    doc["ema_alpha_moving"] = cfg.emaAlphaMoving;
-    doc["leg_angle_tolerance"] = cfg.legAngleTolerance;
-    doc["cartesian_tolerance"] = cfg.cartesianTolerance;
-    doc["laser_distance_offset"] = cfg.laserDistanceOffset;
-    doc["cal_mag_consistency"] = cfg.calMagConsistency;
-    doc["cal_grav_consistency"] = cfg.calGravConsistency;
-    doc["cal_buffer_length"] = (int)cfg.calBufferLength;
-    doc["cal_settle_ms"] = (int)cfg.calSettleMs;
-    doc["cal_ema_alpha"] = cfg.calEmaAlpha;
-    doc["cal_timeout_ms"] = (int)cfg.calTimeoutMs;
+    // ── User settings only — see kUserKeys in loadConfig() ──
+    doc["screen_brightness"] = (int)cfg.screenBrightness;
     doc["auto_shutdown_timeout"] = cfg.autoShutdownTimeout;
     doc["laser_timeout"] = cfg.laserTimeout;
-    doc["laser_wibble"] = cfg.laserWibble;
-    doc["laser_shots"] = (int)cfg.laserShots;
-    doc["laser_sq_limit"] = (int)cfg.laserSqLimit;
-    doc["laser_spread_limit_mm"] = (int)cfg.laserSpreadLimitMm;
     doc["measure_from_front"] = cfg.measureFromFront;
-    doc["screen_brightness"] = (int)cfg.screenBrightness;
     doc["splays_enabled"] = cfg.splaysEnabled;
+    doc["laser_wibble"] = cfg.laserWibble;
+    doc["anomaly_detection"] = cfg.anomalyDetection;
+    doc["cartesian_tolerance"] = cfg.cartesianTolerance;
+    doc["steady_tolerance"] = cfg.stabilityTolerance;
     // Save only the user portion — SAP6_ prefix is always auto-prepended on load
     const char *nameToSave = (strncmp(cfg.bleName, "SAP6_", 5) == 0) ? cfg.bleName + 5 : cfg.bleName;
     doc["ble_name"] = nameToSave;

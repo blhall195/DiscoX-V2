@@ -206,15 +206,27 @@ only when `syncPendingToFlash()` fails.
   for threshold calibration. Background: `discox-sq-rejection-brief.md`
   (note that brief repeats the manual's inverted claim).
 
+- **config.json holds user settings only** (2026-09-26). Ten keys: `ble_name`,
+  `screen_brightness`, `auto_shutdown_timeout`, `laser_timeout`,
+  `measure_from_front`, `splays_enabled`, `laser_wibble`,
+  `anomaly_detection`, `cartesian_tolerance`, `steady_tolerance`. Every
+  other `Config` field (EMA alphas, stability window, `cal_*`, anomaly
+  thresholds, laser SQ/spread/shots, laser offset, leg angle tolerance) is a
+  firmware constant from `Defaults::` — `loadConfig()` starts from
+  `Config()` and reads only the user keys, so changing a default in
+  defaults.h reaches every device on the next flash. Don't move a tuning
+  knob back into the file without a reason a caver would change it.
 - **Settings migration on firmware update.** `loadConfig()` compares the
-  stored `/config.json` against `kExpectedKeys` (config_manager.cpp); if the
-  firmware has gained settings since the file was written, boot logs
-  `Firmware update added settings — migrating config` and re-saves, so new
-  keys appear on the USB drive with their defaults and existing values are
-  preserved. **`kExpectedKeys` must stay exactly in sync with the `doc[...]`
-  keys in `saveConfig()`** — a key listed but never written makes every boot
-  re-save the file (needless flash wear); a key written but not listed simply
-  won't trigger migration.
+  stored `/config.json` against `kUserKeys` and `kRetiredKeys`
+  (config_manager.cpp); a missing user key or a leftover retired key makes
+  boot log `Firmware update added settings — migrating config` and re-save,
+  so new keys appear with their defaults, retired ones vanish, and user
+  values are kept. **`kUserKeys` must stay exactly in sync with the
+  `doc[...]` keys in `saveConfig()`** — a key listed but never written makes
+  every boot re-save the file (needless flash wear). When a user key is
+  removed or renamed, add the old name to `kRetiredKeys`. Renaming is also
+  the way to push a new default over stored values: `stability_tolerance`
+  became `steady_tolerance` when its meaning and default changed.
 
 - **FatFs caches sectors across the host's writes.** `importFiles()` force-
   remounts the FAT volume (`f_mount(nullptr,...)` then `mountOrFormat()`)
@@ -367,9 +379,7 @@ only when `syncPendingToFlash()` fails.
    short-circuit before the handler): `r` prints one `RAW mag … | acc …`
    line (chip-frame values before `Axes::fixAxes`, for reading the mapping
    off known poses); `s` toggles the `>azimuth`/`>inclination` teleplot
-   stream; `c` dumps the stored `/config.json`; `f` resets filter tuning
-   (EMA alphas + stability buffer) to firmware defaults and saves — needed
-   because a stored config.json otherwise shadows new defaults forever;
+   stream; `c` dumps the stored `/config.json`;
    `p` prints delivery status (undelivered count, in-flight flag, SAP6
    sent/acked/resend/failed-send counters) — the view for verifying the
    reading drain on the bench.
@@ -388,7 +398,7 @@ only when `syncPendingToFlash()` fails.
    `>MELODY f:ms,f:ms,...` (f=0 is a rest), `>SOUND name` (click, shot,
    reading, leg, warning, error, snakestart, snakeeat, snakecrash), `>STOP`.
    Kept behind the `>` prefix so it can't collide with the single-char `r`/
-   `s`/`c`/`f` commands above. Each command replies `OK`/`ERR ...` on
+   `s`/`c`/`p` commands above. Each command replies `OK`/`ERR ...` on
    `Serial`.
 2. OLED electrically verified on hardware 2026-07-07 (I2C ACK + `begin()`,
    pattern cycle running) — this exposed that the V2 panel is at **0x3C**,

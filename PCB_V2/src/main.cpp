@@ -1120,24 +1120,6 @@ static void readSensorsUpdate(uint32_t now) {
         } else if (c == 's' || c == 'S') {
             teleplotEnabled = !teleplotEnabled;
             Serial.println(teleplotEnabled ? F("Teleplot stream ON") : F("Teleplot stream OFF"));
-        } else if (c == 'f' || c == 'F') {
-            // Reset filter tuning to firmware defaults — a stored config.json
-            // otherwise shadows new defaults forever (loadConfig prefers it).
-            ctx.config.emaAlphaStable = Defaults::emaAlphaStable;
-            ctx.config.emaAlphaMoving = Defaults::emaAlphaMoving;
-            ctx.config.stabilityBufferLength = Defaults::stabilityBufferLength;
-            bool saved = flashOk && configMgr.saveConfig(ctx.config);
-            if (calOk) {
-                sensorMgr.init(&calibration, ctx.config.emaAlphaStable, ctx.config.emaAlphaMoving,
-                               ctx.config.stabilityBufferLength, Defaults::emaJumpThreshold);
-            }
-            Serial.print(F("Filter reset: EMA stable="));
-            Serial.print(ctx.config.emaAlphaStable, 2);
-            Serial.print(F(", moving="));
-            Serial.print(ctx.config.emaAlphaMoving, 2);
-            Serial.print(F(", stability buf="));
-            Serial.print(ctx.config.stabilityBufferLength);
-            Serial.println(saved ? F(" (saved)") : F(" (NOT saved — storage error)"));
         } else if (c == 'b' || c == 'B') {
             buttonIdentifyActive = true;
             Serial.println(F("Button identify mode ON — press each button; "
