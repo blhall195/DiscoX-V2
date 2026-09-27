@@ -99,7 +99,7 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 |------|-----------|---------------|-----------|-----------|
 | Normal | take shot / wake laser | hold: disco toggle; short: splay shot | laser off (power saver; FIRE wakes it again). Disco on: Mario on/off | enter settings menu |
 | Menu | select | up | down | select |
-| Calibration | record point / F-B shot | finish F/B early; on the results screen hold with DOWN to save | undo last point / cancel capture (screen hint "DOWN:undo"); on the results screen hold to discard, or hold with UP to save | inert while collecting points (edge consumed so it can't fire on menu re-entry); any-button advance on intro screens |
+| Calibration | record point / F-B shot | finish the F/B check; on the results screen hold with DOWN to save | undo last point / cancel capture (screen hint "DOWN:undo"); on the results screen hold to discard, or hold with UP to save | inert while collecting points (edge consumed so it can't fire on menu re-entry); any-button advance on intro screens |
 | Snake | — | turn right | turn left | exit |
 
 Power on/off = the dedicated hardware button into the LTC2954 (H3 pin 4,
@@ -216,6 +216,19 @@ What the calibration now does:
   is measured before Part 2 aligns the two sensors), Part 2 ≈ 0.1°; the
   final calibration held dip to 67.2° ± 0.12° over all 80 points.
 - **Timeout** no longer records an unsettled point: triple beep, retry.
+- **F/B check is read-only** (2026-09-27). It used to fit a sinusoidal
+  residual hard-iron correction to the F/B pairs and shift `mag.centre_`.
+  Bootstrapping the outdoor calibration put the residual that could fix at
+  ~0.1° RMS (≤0.25° worst heading), below hand-aiming noise, so a fit from
+  a few pairs mostly modelled noise, and any other F/B error (laser/sensor
+  misalignment, a car nearby) would be baked in as hard iron. Now each shot
+  uses the survey-shot pipeline (a private `SensorManager`, averaged steady
+  hold, `steady_tolerance` clamped 0.5-5° on load); a station is 3 agreeing
+  shots, as for a leg. It shows each pair's azimuth error (off 180°) and
+  inclination sum, then the mean and a verdict: ≤1° Good, ≤2° OK, else
+  Recal. The thresholds allow for station-marking error, since a few cm on
+  a 5 m leg is ~0.5°. Legs with |inc| > 70° count for inclination only.
+  Hold DOWN exits straight back to normal mode (no save, no reboot).
 
 ## Gotchas (inherited + new)
 
@@ -400,7 +413,10 @@ What the calibration now does:
    the 2026-09-26 log) into the mag transform, and re-running Part 2 alone
    does not remove it (tested offline). Such a file is converted in RAM but
    never saved, `dip_avg` is zeroed (disables the dip anomaly check), and
-   boot shows **RECAL NEEDED** every time until a full recalibration.
+   boot shows **RECAL NEEDED** every time until a full recalibration. While
+   it is set (`calNeedsRedo`), menu → Part 2 runs the full calibration
+   instead: Part 2 saves the stored calibration, which would clear the
+   warning without fixing it. (The F/B check is read-only, so it's allowed.)
    Note Part 2's accuracy figure is blind to this — the broken calibration
    scored 0.15° vs 0.29° for the correct one. `c` on serial prints the
    calibration axes and the **live dip**, which should sit near the local

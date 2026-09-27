@@ -2,9 +2,9 @@
 //
 // These are acceptance tests, not just regression tests: they verify that the
 // C++ port recovers known ground truth (centre, soft-iron, injected hard-iron
-// residual) from generated data. applyFBCorrection especially has no Python
-// reference — a wrong sign there would *corrupt* a good calibration in the
-// field, so its sign convention is pinned down here.
+// residual) from generated data. Sensor::reframe has no Python reference —
+// a mistake there would corrupt every calibration converted to a corrected
+// axis mapping — so its defining property is pinned down here.
 
 #include "mag_cal/calibration.h"
 #include "mag_cal/sensor.h"
@@ -171,104 +171,71 @@ void test_alignSensorRoll_transform_stays_finite() {
     }
 }
 
-// ── applyFBCorrection: sign convention + ground-truth recovery ──────
+// ── Sensor::reframe: converting a calibration between axis mappings ──
+// Stored calibrations are carried into a corrected axis mapping at boot
+// (initCalibration). Getting this wrong silently corrupts every converted
+// device, so pin the defining property: after reframe, every calibrated
+// vector is the old calibrated vector expressed in the new device frame.
 
-// Bearings observed when a residual hard-iron offset delta (device frame,
-// calibrated units) contaminates the readings.
-static void observedFB(const MagCal::Calibration &cal, const Eigen::Vector3f &delta, float dip,
-                       const float *stations, int n, float *fwd, float *bwd) {
-    for (int i = 0; i < n; i++) {
-        fwd[i] = cal.getAngles(magAtHeading(stations[i], dip) + delta, gravLevel()).azimuth;
-        bwd[i] = cal.getAngles(magAtHeading(stations[i] + 180.0f, dip) + delta, gravLevel()).azimuth;
+// The mapping changes that have actually shipped: mag July/09-19 -> 09-26,
+// grav 09-19 -> 09-26, grav July -> 09-26
+static const char *const REFRAMES[][2] = {
+    {"+Y-X+Z", "-Y-X+Z"}, {"-Y-X+Z", "-Y-X-Z"}, {"+Y-X-Z", "-Y-X-Z"}};
+
+static std::vector<Eigen::Vector3f> distortedSphere() {
+    Eigen::Matrix3f soft;
+    soft << 1.10f, 0.02f, 0.00f, //
+        0.02f, 0.95f, 0.01f,     //
+        0.00f, 0.01f, 1.03f;
+    Eigen::Vector3f centre(3.0f, -5.0f, 10.0f);
+    std::vector<Eigen::Vector3f> data;
+    for (const auto &u : spherePoints(56)) {
+        data.push_back(soft * (50.0f * u) + centre);
     }
+    return data;
 }
 
-void test_applyFBCorrection_recovers_injected_offset() {
-    MagCal::Calibration cal;
-    loadIdentityCal(cal);
+void test_reframe_equals_fresh_fit_in_new_frame() {
+    auto data = distortedSphere();
+    for (const auto &r : REFRAMES) {
+        MagCal::Sensor converted(r[0]);
+        TEST_ASSERT_TRUE(converted.fitEllipsoid(data) >= 0.0f);
+        converted.reframe(r[1]);
 
-    const float dip = 30.0f; // must match dip_avg in the JSON
-    const Eigen::Vector3f delta(0.03f, 0.02f, 0.0f);
-    const float stations[] = {10.0f, 75.0f, 150.0f, 230.0f, 310.0f};
-    const int n = 5;
-    float fwd[n], bwd[n];
-    observedFB(cal, delta, dip, stations, n, fwd, bwd);
+        MagCal::Sensor fresh(r[1]);
+        TEST_ASSERT_TRUE(fresh.fitEllipsoid(data) >= 0.0f);
 
-    float amp = cal.applyFBCorrection(fwd, bwd, n);
-
-    // Amplitude ≈ |delta_horizontal| / cos(dip), in degrees
-    float expectedAmp = sqrtf(delta[0] * delta[0] + delta[1] * delta[1]) / cosf(dip * DEG2RADF) / DEG2RADF;
-    TEST_ASSERT_FLOAT_WITHIN(0.3f, expectedAmp, amp);
-
-    // Centre absorbed the offset — SIGN is the critical assertion here:
-    // centre must move TOWARD +delta so that (raw - centre) removes it
-    TEST_ASSERT_FLOAT_WITHIN(0.005f, delta[0], cal.mag().centre()[0]);
-    TEST_ASSERT_FLOAT_WITHIN(0.005f, delta[1], cal.mag().centre()[1]);
-
-    // Gold check: with the corrected calibration, the same physical setup
-    // now yields near-zero foresight/backsight disagreement
-    observedFB(cal, delta, dip, stations, n, fwd, bwd);
-    for (int i = 0; i < n; i++) {
-        float err = wrap180(fwd[i] - bwd[i] - 180.0f);
-        TEST_ASSERT_FLOAT_WITHIN(0.2f, 0.0f, err);
-    }
-}
-
-void test_applyFBCorrection_not_applied_with_two_pairs() {
-    MagCal::Calibration cal;
-    loadIdentityCal(cal);
-
-    const Eigen::Vector3f delta(0.03f, 0.02f, 0.0f);
-    const float stations[] = {10.0f, 100.0f};
-    float fwd[2], bwd[2];
-    observedFB(cal, delta, 30.0f, stations, 2, fwd, bwd);
-
-    cal.applyFBCorrection(fwd, bwd, 2);
-
-    // Guard must leave the calibration untouched
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, cal.mag().centre()[0]);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, cal.mag().centre()[1]);
-}
-
-void test_applyFBCorrection_not_applied_with_clustered_bearings() {
-    MagCal::Calibration cal;
-    loadIdentityCal(cal);
-
-    // All shots within a 30° sector — fit would be an extrapolation
-    const Eigen::Vector3f delta(0.03f, 0.02f, 0.0f);
-    const float stations[] = {10.0f, 18.0f, 25.0f, 33.0f, 40.0f};
-    float fwd[5], bwd[5];
-    observedFB(cal, delta, 30.0f, stations, 5, fwd, bwd);
-
-    cal.applyFBCorrection(fwd, bwd, 5);
-
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, cal.mag().centre()[0]);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, cal.mag().centre()[1]);
-}
-
-void test_applyFBCorrection_not_applied_when_not_sinusoidal() {
-    MagCal::Calibration cal;
-    loadIdentityCal(cal);
-
-    // Hand-built bearing errors: alternating ±2° — large amplitude in the
-    // data but nothing a one-cycle sinusoid can explain (residual RMS ≈
-    // fitted amplitude). Simulates a blunder pair / non-hard-iron error.
-    const float stations[] = {10.0f, 80.0f, 150.0f, 220.0f, 290.0f};
-    float fwd[5], bwd[5];
-    for (int i = 0; i < 5; i++) {
-        float err = (i % 2 == 0) ? 2.0f : -2.0f;
-        fwd[i] = stations[i];
-        float b = stations[i] - 180.0f - 2.0f * err;
-        while (b < 0.0f) {
-            b += 360.0f;
+        TEST_ASSERT_EQUAL_STRING(r[1], converted.axes().toString());
+        for (int i = 0; i < 3; i++) {
+            TEST_ASSERT_FLOAT_WITHIN(1e-3f, fresh.centre()[i], converted.centre()[i]);
+            for (int j = 0; j < 3; j++) {
+                TEST_ASSERT_FLOAT_WITHIN(1e-6f, fresh.transform()(i, j), converted.transform()(i, j));
+            }
         }
-        bwd[i] = b;
     }
+}
 
-    cal.applyFBCorrection(fwd, bwd, 5);
+void test_reframe_preserves_calibrated_vectors_including_rbf() {
+    auto data = distortedSphere();
+    // Non-trivial non-linear correction on X and Z (Y stays linear, as the
+    // alignment fit produces)
+    const float params[15] = {0.003f, -0.0004f, 0.0008f, -0.002f, 0.0025f, //
+                              0, 0, 0, 0, 0,                                //
+                              0.0007f, 0.0005f, 0.0009f, 0.0014f, 0.0019f};
+    for (const auto &r : REFRAMES) {
+        MagCal::Sensor before(r[0]);
+        TEST_ASSERT_TRUE(before.fitEllipsoid(data) >= 0.0f);
+        before.setNonLinearParams(params, 15);
 
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, cal.mag().centre()[0]);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, cal.mag().centre()[1]);
+        MagCal::Sensor after = before;
+        Eigen::Matrix3f P = after.reframe(r[1]);
+
+        for (const auto &raw : data) {
+            Eigen::Vector3f expected = P * before.apply(raw);
+            TEST_ASSERT_TRUE_MESSAGE((after.apply(raw) - expected).norm() < 1e-5f,
+                                     "reframe changed a calibrated vector");
+        }
+    }
 }
 
 // ── Runner ──────────────────────────────────────────────────────────
@@ -280,9 +247,7 @@ int main(int, char **) {
     RUN_TEST(test_fitEllipsoid_rejects_planar_data);
     RUN_TEST(test_fitEllipsoid_rejects_too_few_points);
     RUN_TEST(test_alignSensorRoll_transform_stays_finite);
-    RUN_TEST(test_applyFBCorrection_recovers_injected_offset);
-    RUN_TEST(test_applyFBCorrection_not_applied_with_two_pairs);
-    RUN_TEST(test_applyFBCorrection_not_applied_with_clustered_bearings);
-    RUN_TEST(test_applyFBCorrection_not_applied_when_not_sinusoidal);
+    RUN_TEST(test_reframe_equals_fresh_fit_in_new_frame);
+    RUN_TEST(test_reframe_preserves_calibrated_vectors_including_rbf);
     return UNITY_END();
 }

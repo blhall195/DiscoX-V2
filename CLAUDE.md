@@ -90,10 +90,11 @@ Same math in V1 and V2. Ported from Python; uses Eigen for linear algebra.
 - **Alignment**: 24 points at 3 orientations → rotates transform to gravity reference
 - **RBF non-linear correction**: Gaussian radial basis functions per magnetometer axis
 - **Anomaly detection**: field strength ±2%, dip angle ±3° triggers warnings
-- **F/B field check**: Post-calibration correction for residual hard-iron from calibration
-  environment. User takes 3+ foresight/backsight pairs. Sinusoidal model `a·sin(θ) + b·cos(θ)`
-  solved via least-squares, back-projected to adjust `mag.centre_`. Menu → Enter Calibration →
-  Field Check (F/B).
+- **F/B check** (Menu → Calibration → F/B Check): read-only. The user shoots legs
+  forward and back; each pair's azimuth disagreement (off 180°) and inclination sum are shown,
+  then the mean with a verdict (≤1° Good, ≤2° OK, else Recal). It used to fit a sinusoidal
+  residual hard-iron correction and adjust `mag.centre_`; removed 2026-09-27 — on a clean
+  calibration the correctable residual was ~0.1° RMS, below hand-aiming noise.
 
 Note: V2 axis mappings are mag `"-Y-X+Z"`, grav `"-Y-X-Z"` (2026-09-26), settled from a real
 on-device calibration log: with them the dip angle is constant across all 80 points (67.8° ±

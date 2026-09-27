@@ -773,7 +773,7 @@ void loop() {
         return;
     }
 
-    // Mag Field Check (Foreshot/Backshot)
+    // F/B check (foresight/backsight) — read-only, never changes the calibration
     if (menuMgr.exitAction() == MenuExitAction::ENTER_FB_CHECK) {
         menuMgr.clearExitAction();
         if (magOk && accelOk && dispOk && laserOk && calOk) {

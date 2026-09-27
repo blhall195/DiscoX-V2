@@ -138,7 +138,7 @@ void MenuManager::buildMenu() {
     // ── Enter Calibration submenu ────────────────────────────────
     _longCalSub.init(*_display, "Enter Calibration");
     _calSub.addSubmenu("Enter Calibration", &_longCalSub);
-    _calSub.addAction("Mag Field Check", enterFBCheck);
+    _calSub.addAction("F/B Check", enterFBCheck);
     _calSub.addAction("View Last Cal", viewLastCal);
     _calSub.addAction("Test Save", testCalSave);
     _calSub.addAction("<- Back", goToRoot);

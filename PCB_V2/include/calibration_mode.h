@@ -14,6 +14,7 @@
 #include "laser_manager.h"
 #include "mag_cal/calibration.h"
 #include "rm3100.h"
+#include "sensor_manager.h"
 #include <Arduino.h>
 #include <ArduinoEigenDense.h>
 #include <vector>
@@ -39,9 +40,7 @@ enum class CalibState : uint8_t {
     FB_WAIT_FORESIGHT,     // F/B check: waiting for user to take foresight shot
     FB_WAIT_BACKSIGHT,     // F/B check: waiting for user to take backsight shot
     FB_PAIR_RESULT,        // F/B check: showing pair error, waiting for button press
-    FB_CALCULATING,        // F/B check: running sinusoidal fit
-    FB_RESULTS,            // F/B check: showing residual amplitude, save/discard
-    FB_SAVING,             // F/B check: saving corrected calibration
+    FB_RESULTS,            // F/B check: summary + verdict, hold DOWN to exit
     SHUTDOWN_CONFIRM,      // power-off confirmation screen (press again to confirm)
     DONE                   // finished, caller should exit calibration mode
 };
@@ -53,9 +52,9 @@ class CalibrationMode {
                RM3100 &magSensor, SCA3300 &accel, ConfigManager &cfgMgr, MagCal::Calibration &cal,
                const Config &config, CalMode mode = CalMode::PART1_ELLIPSOID);
 
-    /// Enter foresight/backsight field check mode.
-    /// Requires an existing calibration. Collects F/B pairs to correct residual
-    /// hard-iron offset from the calibration environment.
+    /// Enter the foresight/backsight check. Requires an existing calibration.
+    /// Shows how far each foresight/backsight pair disagrees and gives a
+    /// verdict; it never changes the calibration.
     void beginFBCheck(ButtonManager &btns, DisplayManager &disp, DiscoManager &disco, LaserManager &laser,
                       RM3100 &magSensor, SCA3300 &accel, ConfigManager &cfgMgr, MagCal::Calibration &cal,
                       const Config &config);
@@ -156,45 +155,36 @@ class CalibrationMode {
 
     // ── F/B check data ──
     static constexpr int FB_MAX_PAIRS = 10;
-    float fbFwd_[FB_MAX_PAIRS];       // foresight bearings (degrees)
-    float fbBwd_[FB_MAX_PAIRS];       // backsight bearings (degrees)
-    float fbFwdSpread_[FB_MAX_PAIRS]; // max-min spread of 3 foresight legs
-                                      // (degrees)
-    float fbBwdSpread_[FB_MAX_PAIRS]; // max-min spread of 3 backsight legs
-                                      // (degrees)
-    int fbCount_ = 0;                 // number of completed pairs
-    bool fbHasForesight_ = false;     // true if foresight recorded for current pair
-    float fbCurrentFwd_ = 0.0f;       // current foresight bearing
-    float fbCurrentFwdSpread_ = 0.0f; // spread of current foresight legs
-    float fbAmplitude_ = 0.0f;        // result: correction amplitude (degrees)
+    float fbFwdAz_[FB_MAX_PAIRS]; // foresight direction per pair (degrees)
+    float fbFwdInc_[FB_MAX_PAIRS];
+    float fbBwdAz_[FB_MAX_PAIRS]; // backsight direction per pair (degrees)
+    float fbBwdInc_[FB_MAX_PAIRS];
+    int fbCount_ = 0;             // number of completed pairs
+    bool fbHasForesight_ = false; // true if foresight recorded for current pair
+    float fbCurrentFwdAz_ = 0.0f; // current pair's foresight
+    float fbCurrentFwdInc_ = 0.0f;
 
-    // Bearing stability buffer (replicates SensorManager pattern)
-    static constexpr int FB_STAB_LEN = 3;
-    float fbStabBuf_[FB_STAB_LEN];
-    int fbStabHead_ = 0;
-    int fbStabCount_ = 0;
+    // Shots use the same pipeline as survey shots (median filter, averaged
+    // steady hold, steady_tolerance) — a private instance, since the main
+    // loop's SensorManager is not updated while calibration mode runs.
+    SensorManager fbSensor_;
+    float fbSteadyTol_ = Defaults::stabilityTolerance;
 
-    // Leg consistency buffer (3 shots must agree to accept a bearing)
+    // Leg consistency buffer (3 shots must agree, as for a survey leg)
     static constexpr int FB_LEG_LEN = 3;
-    float fbLegBuf_[FB_LEG_LEN];
+    float fbLegAz_[FB_LEG_LEN];
+    float fbLegInc_[FB_LEG_LEN];
     int fbLegCount_ = 0;
+    float fbLegAngleTol_ = Defaults::legAngleTolerance;
 
-    bool fbTakingShot_ = false; // true = red LED, waiting for stability
+    bool fbTakingShot_ = false; // true = red LED, waiting for a steady hold
     bool fbLaserOn_ = true;     // tracks laser state during FB collection
-
-    // Config values for FB stability/leg checks
-    float fbStabilityTol_ = 0.4f;
-    float fbLegAngleTol_ = 1.7f;
     bool fbLaserWibble_ = false;
 
-    // EMA smoothing on bearing (matches SensorManager pipeline)
-    float fbEmaAz_ = 0.0f;
-    float fbEmaAlpha_ = 0.5f; // from config.emaAlpha
-    bool fbEmaSeeded_ = false;
-
-    // Display refresh timing
+    // Live display
     uint32_t fbLastDisplayTime_ = 0;
-    float fbCurrentBearing_ = 0.0f; // latest EMA-smoothed bearing for live display
+    float fbCurrentBearing_ = 0.0f;
+    float fbCurrentInc_ = 0.0f;
 
     // ── State handlers ──
     void updateIntro();
@@ -206,9 +196,7 @@ class CalibrationMode {
     void updateFBIntro();
     void updateFBWaitShot();
     void updateFBPairResult();
-    void updateFBCalculating();
     void updateFBResults();
-    void updateFBSaving();
     void updateShutdownConfirm();
 
     // ── Helpers ──
@@ -218,9 +206,6 @@ class CalibrationMode {
     Eigen::Vector3f average(const Eigen::Vector3f *buffer, int count) const;
     void recordPoint(const Eigen::Vector3f &mag, const Eigen::Vector3f &grav);
     void updateCoverageBar(const Eigen::Vector3f &grav);
-    float getBearing(const Eigen::Vector3f &mag, const Eigen::Vector3f &grav);
-    bool fbBearingStable(float tolerance) const;
-    float fbCircularAverage(const float *buf, int count) const;
 
     // ── Display helpers ──
     void showEllipsoidIntro();
@@ -232,7 +217,7 @@ class CalibrationMode {
     void showSavingScreen();
     void showFBIntroScreen();
     void showFBLiveScreen();
-    void showFBPairResult(float error, float bearing);
+    void showFBPairResult();
     void showFBResultsScreen();
     void showShutdownConfirmScreen(uint8_t holdPct = 0);
     void redrawScreen(CalibState s);
