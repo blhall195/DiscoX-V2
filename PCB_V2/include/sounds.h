@@ -22,7 +22,8 @@ void begin(Buzzer &buzzer);
 
 void shotStart();   // measurement started / laser fired: short crisp click
 void click();       // generic short confirmation blip (calibration points, etc.)
-void readingOk();   // reading captured: single LOUD bleep at resonance
+void readingOk();   // reading captured: rising third landing on the 3.85 kHz peak
+void splayOk();     // splay (quick shot) captured: single flat beep on the peak
 void legComplete(); // 3 consistent shots: rising three-note fanfare
 void warning();     // soft refusal (e.g. splays disabled): two mid blips
 void error();       // measurement/system error: sad falling womp

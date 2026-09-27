@@ -15,6 +15,9 @@ namespace Sounds {
 
 static Buzzer *buzzer = nullptr;
 
+// Where this element is loudest (measured on hardware, 2026-09-27)
+static constexpr uint32_t READING_PEAK_HZ = 3850;
+
 void begin(Buzzer &b) { buzzer = &b; }
 
 void shotStart() {
@@ -35,11 +38,29 @@ void readingOk() {
     if (!buzzer) {
         return;
     }
-    // The headline "reading taken" bleep. Deliberately BELOW the 4 kHz
-    // resonance: dead on the peak, bit-bang timing jitter modulates the
-    // amplitude and the tone warbles ("chirpy"). 3.5 kHz sits on the flatter
-    // shoulder of the response — slightly quieter but a clean steady bleep.
-    buzzer->tone(3500, 250);
+    // The headline "reading taken" sound: a rising major third ("ding-DING")
+    // that lands on the element's peak. Picked on hardware (2026-09-27) from
+    // an audition of candidates; this element is loudest at 3.85 kHz (fine
+    // finder: 3.80-4.00 kHz in 50 Hz steps), not the nominal 4 kHz. Driven
+    // by hardware PWM, which holds the frequency exactly — the old bit-bang
+    // tone() warbled on the peak, which is why it used to sit at 3.5 kHz.
+    buzzer->startTone(READING_PEAK_HZ * 4 / 5); // 3.08 kHz
+    delay(90);
+    buzzer->startTone(READING_PEAK_HZ);
+    delay(180);
+    buzzer->stopTone();
+}
+
+void splayOk() {
+    if (!buzzer) {
+        return;
+    }
+    // Splay (quick shot) taken: one plain beep on the peak — as loud as the
+    // reading sound but flat, so a splay is told apart from a leg shot by
+    // ear. Picked on hardware from the same audition (2026-09-27).
+    buzzer->startTone(READING_PEAK_HZ);
+    delay(250);
+    buzzer->stopTone();
 }
 
 void legComplete() {

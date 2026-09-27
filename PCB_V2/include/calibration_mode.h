@@ -224,7 +224,6 @@ class CalibrationMode {
 
     // ── Beep control ──
     void beep();
-    void beepTriple();
     void updateBeep();
 
     // ── Calculation ──

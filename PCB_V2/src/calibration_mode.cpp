@@ -1,6 +1,8 @@
 #include "calibration_mode.h"
 #include "math_utils.h"
 #include "shot_vector.h"
+#include "feedback.h"
+#include "sounds.h"
 #include <algorithm>
 #include <math.h>
 
@@ -246,7 +248,7 @@ void CalibrationMode::updateCollecting() {
         accumMag_ = Eigen::Vector3f::Zero();
         accumGrav_ = Eigen::Vector3f::Zero();
         accumCount_ = 0;
-        disco_->setRed();
+        Feedback::shotStart(*disco_); // as for a survey shot
     }
 
     // DOWN (as shown on screen) undoes the last recorded point. MENU is
@@ -338,8 +340,7 @@ void CalibrationMode::updateCollecting() {
                 Serial.println(F("Stability timeout — point not taken, press FIRE to retry"));
                 waitingForStable_ = false;
                 settleStart_ = 0;
-                disco_->turnOff();
-                beepTriple();
+                Feedback::failed(*disco_); // as for a failed laser shot
             }
         }
     }
@@ -570,8 +571,7 @@ void CalibrationMode::acceptPoint(const Eigen::Vector3f &mag, const Eigen::Vecto
     recordPoint(mag, grav);
 
     Serial.print(F("Accepted point "));
-    disco_->setGreen();
-    beep();
+    Feedback::readingOk(*disco_); // as for a survey reading
 
     iteration_++;
     waitingForStable_ = false;
@@ -596,9 +596,7 @@ void CalibrationMode::acceptPoint(const Eigen::Vector3f &mag, const Eigen::Vecto
     Serial.print(F("/"));
     Serial.println(targetCount_);
 
-    // Brief green flash then turn off LED
-    delay(200);
-    disco_->turnOff();
+    disco_->turnOff(); // green ends with the reading, as in survey use
 
     // Alignment: laser off for 500ms then back on (visual feedback)
     if (state_ == CalibState::COLLECTING_ALIGNMENT) {
@@ -907,20 +905,11 @@ void CalibrationMode::showSavingScreen() {
 // ── Beep control ────────────────────────────────────────────────────
 
 void CalibrationMode::beep() {
-    // Match normal measurement success beep pattern
-    delay(25);
-    laser_->setBuzzer(true);
-    delay(100);
-    laser_->setBuzzer(false);
-    delay(25);
+    // Calibration-only cues (undo, Part 2 "change direction"): a click.
+    // Shot-like events use Feedback:: so they match survey use.
+    Sounds::click();
 }
 
-void CalibrationMode::beepTriple() {
-    for (int i = 0; i < 3; i++) {
-        laser_->setBuzzer(true);
-        delay(100);
-    }
-}
 
 void CalibrationMode::updateBeep() {
     if (beepActive_ && millis() >= beepEndTime_) {
@@ -1277,24 +1266,16 @@ void CalibrationMode::updateFBWaitShot() {
         showFBLiveScreen();
     }
 
-    // FIRE: first press wakes the laser to aim, the next takes a shot
-    // (same two-press flow as a survey shot)
+    // FIRE: first press wakes the laser to aim, the next takes a shot —
+    // the survey two-press flow, with the survey feedback (Feedback::)
     if (btns_->wasPressed(Button::FIRE) && !fbTakingShot_) {
         if (!fbLaserOn_) {
-            laser_->setBuzzer(true);
-            delay(25);
+            disco_->turnOff(); // wake is silent and clears purple, as in survey use
             laser_->setLaser(true);
-            delay(200);
-            laser_->setBuzzer(false);
-            delay(25);
             fbLaserOn_ = true;
         } else {
             fbTakingShot_ = true;
-            disco_->setRed();
-            laser_->setBuzzer(true);
-            delay(100);
-            laser_->setBuzzer(false);
-            delay(25);
+            Feedback::shotStart(*disco_);
         }
     }
 
@@ -1314,16 +1295,6 @@ void CalibrationMode::updateFBWaitShot() {
 
     // Steady — shot taken
     fbTakingShot_ = false;
-    disco_->setGreen();
-    delay(25);
-    laser_->setBuzzer(true);
-    delay(100);
-    laser_->setBuzzer(false);
-    delay(25);
-    laser_->setLaser(false);
-    fbLaserOn_ = false;
-    disco_->turnOff();
-
     Serial.print(F("FB shot: az "));
     Serial.print(az, 2);
     Serial.print(F(" inc "));
@@ -1342,35 +1313,30 @@ void CalibrationMode::updateFBWaitShot() {
         fbLegAz_[FB_LEG_LEN - 1] = az;
         fbLegInc_[FB_LEG_LEN - 1] = inc;
     }
-    if (fbLegCount_ < FB_LEG_LEN) {
-        return;
-    }
-    for (int i = 0; i < FB_LEG_LEN; i++) {
-        for (int j = i + 1; j < FB_LEG_LEN; j++) {
-            if (angleBetweenDeg(fbLegAz_[i], fbLegInc_[i], fbLegAz_[j], fbLegInc_[j]) > fbLegAngleTol_) {
-                return; // not three agreeing shots yet
-            }
+    bool legDone = fbLegCount_ >= FB_LEG_LEN;
+    for (int i = 0; legDone && i < FB_LEG_LEN; i++) {
+        for (int j = i + 1; legDone && j < FB_LEG_LEN; j++) {
+            legDone = angleBetweenDeg(fbLegAz_[i], fbLegInc_[i], fbLegAz_[j], fbLegInc_[j]) <= fbLegAngleTol_;
         }
     }
 
-    // Leg complete — same feedback as a survey leg
+    // As in survey use: a lone reading bleeps green and ends with the laser
+    // and LED off; a completed leg plays the fanfare instead and stays purple
+    if (!legDone) {
+        Feedback::readingOk(*disco_);
+        laser_->setLaser(false);
+        fbLaserOn_ = false;
+        disco_->turnOff();
+        return;
+    }
+
     float legAz, legInc;
     meanDirection(fbLegAz_, fbLegInc_, FB_LEG_LEN, legAz, legInc);
     fbLegCount_ = 0;
-    for (int i = 0; i < 3; i++) {
-        laser_->setBuzzer(true);
-        disco_->setWhite();
-        delay(100);
-        laser_->setBuzzer(false);
-        disco_->turnOff();
-        delay(100);
-    }
-    if (fbLaserWibble_) {
-        laser_->wibble();
-    }
+    disco_->setGreen(); // the reading itself, as a survey shot shows it
+    Feedback::legComplete(*disco_, *laser_, fbLaserWibble_);
     laser_->setLaser(false);
     fbLaserOn_ = false;
-    disco_->setPurple();
 
     if (state_ == CalibState::FB_WAIT_FORESIGHT) {
         fbCurrentFwdAz_ = legAz;

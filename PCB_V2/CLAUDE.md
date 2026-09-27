@@ -191,6 +191,18 @@ filesystem that mounts and reads but refuses every commit), the drain serves
 readings straight from RAM rather than stranding them. That path is reachable
 only when `syncPendingToFlash()` fails.
 
+## Shot feedback is shared (2026-09-27)
+
+LED + buzzer for shot-like events lives in `src/feedback.cpp`
+(`Feedback::shotStart` red + click, `readingOk` green + loud bleep,
+`legComplete` white + fanfare + wibble → purple, `failed` 4 red flashes +
+womp). Survey shots, calibration points and F/B-check shots all call it, so
+they look and sound the same. Calibration used to carry V1-era sequences of
+its own (a click for a taken point, the LED just going out on a failed one,
+three clicks for an F/B leg), which drifted once `sounds.cpp` arrived.
+Change feedback there, not at call sites. Calibration-only cues (undo, Part 2
+"change direction") stay as a plain `Sounds::click()`.
+
 ## Calibration quality checks (2026-09-26)
 
 Derived from per-point calibration logs captured on 2026-09-26 (a temporary

@@ -19,6 +19,7 @@
 #include "rm3100.h"
 #include "sensor_manager.h"
 #include "snake_game.h"
+#include "feedback.h"
 #include "sounds.h"
 #include "usb_drive.h"
 #include <Adafruit_TinyUSB.h>
@@ -1433,11 +1434,7 @@ static void startShot(bool isQuickShot) {
     lastDistance = 0;
     Serial.println(F("MEASURE: taking measurement"));
 
-    if (!ctx.purpleLatched) {
-        disco.setRed();
-    }
-
-    Sounds::shotStart();
+    Feedback::shotStart(disco, ctx.purpleLatched);
 }
 
 // ── Button event handling ───────────────────────────────────────
@@ -1780,7 +1777,7 @@ static void handleMeasurementSuccess() {
     if (ctx.quickShot) {
         Serial.println(F("  HS:3 quick shot — skipping leg buf"));
         ctx.measurementTaken = false;
-        Sounds::readingOk();
+        Feedback::splayOk(disco);
         return;
     }
 
@@ -1792,21 +1789,9 @@ static void handleMeasurementSuccess() {
     Serial.flush();
 
     if (ctx.shotBuf.hasValidLeg()) {
-        // Rising fanfare under a white flash (was: triple buzz + flash)
-        disco.setWhite();
-        Sounds::legComplete();
-        disco.turnOff();
-
-        // Laser wibble to indicate leg detected
-        if (ctx.config.laserWibble) {
-            laser.wibble();
-        }
-
+        Feedback::legComplete(disco, laser, ctx.config.laserWibble);
         ctx.shotBuf.clear();
-
-        // Latch purple
-        disco.setPurple();
-        ctx.purpleLatched = true;
+        ctx.purpleLatched = true; // purple held until the next FIRE
         ctx.measurementTaken = true;
 
         Serial.println(F("LEG COMPLETE — 3 consistent readings"));
@@ -1815,7 +1800,7 @@ static void handleMeasurementSuccess() {
 
     // Successful reading but leg not complete
     // (function already returned if leg complete)
-    Sounds::readingOk();
+    Feedback::readingOk(disco);
 
     Serial.println(F("  HS:5 done"));
     Serial.flush();
@@ -1837,17 +1822,7 @@ static void alertError(const char *errCode, const char *detail) {
         display.refresh();
     }
 
-    // Red failure disco
-    disco.turnOff();
-    for (int i = 0; i < 4; i++) {
-        disco.setRed();
-        delay(100);
-        disco.turnOff();
-        delay(100);
-    }
-
-    // Beep after error flashes
-    Sounds::error();
+    Feedback::failed(disco); // red flashes, then the womp
 
     // Start the readable hold only now: the flashes above are a blocking
     // ~800 ms during which the screen is already up but the disco is
