@@ -225,8 +225,9 @@ static float lastDistance = 0;
 // Compare the calibrated field strength, averaged over a stretch of still
 // samples, to the calibration's expected value. Catches stale calibration AND
 // sensor remagnetization. A single raw sample (the original check) tripped on
-// noise or on the unit being waved past something magnetic at switch-on; the
-// per-shot MagErr check (±2%) still catches anything subtler.
+// noise or on the unit being waved past something magnetic at switch-on. It
+// is a coarse check for a calibration that no longer fits this device; finer
+// disturbances are the per-shot anomaly check's job (10%, off by default).
 static constexpr uint16_t FIELD_CHECK_WARMUP_SAMPLES = 20;  // skip the first 200 ms
 static constexpr uint16_t FIELD_CHECK_STILL_SAMPLES = 100;  // ~1 s of still readings
 static constexpr uint16_t FIELD_CHECK_GIVE_UP_SAMPLES = 1500; // ~15 s: never held still
@@ -752,6 +753,14 @@ void loop() {
             cm = CalMode::PART2_ALIGNMENT;
         }
         menuMgr.clearExitAction();
+        if (cm == CalMode::PART2_ALIGNMENT && calNeedsRedo) {
+            // Part 2 refines the stored calibration, and a pre-axis-fix one
+            // carries a false inter-sensor rotation Part 2 cannot remove
+            // (tested offline). Saving it would also clear RECAL NEEDED while
+            // leaving the calibration wrong. Run the full calibration.
+            Serial.println(F("Part 2 alone can't fix a pre-axis-fix calibration — running full calibration"));
+            cm = CalMode::PART1_ELLIPSOID;
+        }
         if (magOk && accelOk && dispOk && laserOk) {
             Serial.println(F("Transitioning: menu → calibration"));
             calMode.begin(buttons, display, disco, laser, mag, accel, configMgr, calibration, ctx.config, cm);
@@ -1543,7 +1552,7 @@ static void pollMeasurement(uint32_t now) {
         return;
     }
 
-    // A leg waits for ~0.5 s of steady readings and records their average;
+    // A leg waits for ~0.3 s of steady readings and records their average;
     // quick shots skip the wait and take the live EMA. (In Beta)
     float shotAz = sensorMgr.getAzimuth();
     float shotInc = sensorMgr.getInclination();
@@ -2667,7 +2676,11 @@ static void saveConvertedCalibration() {
     size_t len = serializeJson(doc, buf, sizeof(buf));
     static MagCal::CalibrationBinary bin;
     calibration.toBinary(bin);
+    // BLE is already advertising at this point in boot; SoftDevice flash
+    // ops fail under radio load (config.h), so hush it like calibration does
+    bleRadioQuiet(true);
     bool ok = configMgr.saveCalibrationJson(buf, len) && configMgr.saveCalibrationBinary(bin);
+    bleRadioQuiet(false);
     Serial.println(ok ? F("  Converted calibration saved.")
                       : F("  Converted calibration NOT saved — converting each boot"));
 }

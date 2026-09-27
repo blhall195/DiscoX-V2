@@ -1,4 +1,5 @@
 #include "sensor_manager.h"
+#include "defaults.h"
 #include "math_utils.h"
 #include "shot_vector.h"
 #include <cmath>
@@ -110,7 +111,7 @@ bool SensorManager::stableAverage(float toleranceDeg, float &az, float &inc, flo
         return false;
     }
     if (!(toleranceDeg > 0.1f) || !std::isfinite(toleranceDeg)) {
-        toleranceDeg = 0.5f; // same guard AngularLegChecker::setTolerance applied
+        toleranceDeg = Defaults::stabilityTolerance; // loadConfig clamps; belt and braces
     }
 
     // Average as unit vectors: immune to the 0/360 wrap and to azimuth

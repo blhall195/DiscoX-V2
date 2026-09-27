@@ -200,6 +200,14 @@ bool ConfigManager::loadConfig(Config &cfg) {
     cfg.anomalyDetection = doc["anomaly_detection"] | Defaults::anomalyDetection;
     cfg.cartesianTolerance = doc["cartesian_tolerance"] | Defaults::cartesianTolerance;
     cfg.stabilityTolerance = doc["steady_tolerance"] | Defaults::stabilityTolerance;
+    // Hand-editable on the USB drive: below ~0.5 deg a steady hand never
+    // qualifies (tremor is 0.2-0.3 deg SD); above ~5 deg a shot can be taken
+    // mid-swing and the averaged reading smears across the movement.
+    if (!(cfg.stabilityTolerance >= 0.5f)) { // also catches NaN
+        cfg.stabilityTolerance = 0.5f;
+    } else if (cfg.stabilityTolerance > 5.0f) {
+        cfg.stabilityTolerance = 5.0f;
+    }
 
     const char *rawName = doc["ble_name"] | Defaults::bleName;
     // Strip SAP6_ prefix if user included it — we always prepend it ourselves
