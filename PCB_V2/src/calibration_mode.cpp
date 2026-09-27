@@ -83,8 +83,6 @@ void CalibrationMode::begin(ButtonManager &btns, DisplayManager &disp, DiscoMana
     resultGravAcc_ = 0.0f;
     resultAccuracy_ = 0.0f;
 
-    memset(coverageZones_, 0, sizeof(coverageZones_));
-
     // Turn on laser for calibration
     laser_->setLaser(true);
 
@@ -281,13 +279,8 @@ void CalibrationMode::updateCollecting() {
         Serial.print(F("/"));
         Serial.println(targetCount_);
 
-        // Recalculate coverage bar for ellipsoid mode
         if (state_ == CalibState::COLLECTING_ELLIPSOID) {
-            memset(coverageZones_, 0, sizeof(coverageZones_));
-            for (size_t i = 0; i < gravArray_.size(); i++) {
-                updateCoverageBar(gravArray_[i]);
-            }
-            showEllipsoidScreen();
+            showEllipsoidScreen(); // globe redraws from gravArray_
         } else {
             showAlignmentProgress();
         }
@@ -546,27 +539,6 @@ void CalibrationMode::recordPoint(const Eigen::Vector3f &mag, const Eigen::Vecto
     gravArray_.push_back(grav);
 }
 
-// ── Coverage bar ────────────────────────────────────────────────────
-
-void CalibrationMode::updateCoverageBar(const Eigen::Vector3f &grav) {
-    // Map gravity vector to coverage zone
-    float magnitude = grav.norm();
-    if (magnitude < 0.001f) {
-        return;
-    }
-
-    float nz = grav[2] / magnitude;
-    float elevation = radiansToDegrees(asinf(fmaxf(-1.0f, fminf(1.0f, nz))));
-    float azimuth = wrapTo360(radiansToDegrees(atan2f(grav[1], grav[0])));
-
-    int row = (int)((elevation + 90.0f) / 45.0f);
-    row = max(0, min(COV_ROWS - 1, row));
-    int col = (int)(azimuth / 45.0f);
-    col = max(0, min(COV_COLS - 1, col));
-
-    coverageZones_[row][col] = true;
-}
-
 void CalibrationMode::acceptPoint(const Eigen::Vector3f &mag, const Eigen::Vector3f &grav) {
     recordPoint(mag, grav);
 
@@ -580,7 +552,6 @@ void CalibrationMode::acceptPoint(const Eigen::Vector3f &mag, const Eigen::Vecto
 
     // Update display
     if (state_ == CalibState::COLLECTING_ELLIPSOID) {
-        updateCoverageBar(grav);
         showEllipsoidScreen();
     } else {
         showAlignmentProgress();
@@ -631,13 +602,24 @@ void CalibrationMode::showEllipsoidIntro() {
     d.println(F("Calibrate"));
     d.println(F("Phase 1"));
 
-    // Instructions
+    // Instructions: the cube set on the calibration card — 14 directions
+    // (6 faces + 8 corners) x 4 quarter-turn rolls = 56 readings
     d.setTextSize(1);
-    d.setCursor(0, 44);
-    d.println(F("Take 56 readings in a"));
-    d.println(F("diverse range of"));
-    d.println(F("directions and"));
-    d.println(F("orientations."));
+    d.setCursor(0, 40);
+    d.println(F("Aim roughly at every"));
+    d.println(F("face and corner of an"));
+    d.println(F("imaginary cube - 14"));
+    d.println(F("positions - barrel"));
+    d.println(F("rolling the device"));
+    d.print(F("90"));
+    {
+        // Font has no usable degree sign — draw one, as DisplayManager does
+        int16_t x = d.getCursorX(), y = d.getCursorY();
+        d.drawCircle(x + 1, y + 1, 1, SH110X_WHITE);
+        d.setCursor(x + 4, y);
+    }
+    d.println(F(" four times at"));
+    d.println(F("each one."));
 
     // Dismiss prompt
     d.setCursor(0, 110);
@@ -682,77 +664,80 @@ void CalibrationMode::showEllipsoidScreen() {
     d.clearDisplay();
     d.setTextColor(SH110X_WHITE);
 
-    // Title
-    d.setTextSize(2);
-    d.setCursor(0, 0);
-    d.println(F("Ellipsoid"));
-
-    // Counter
     char buf[16];
     snprintf(buf, sizeof(buf), "%d/56", iteration_);
-    d.setTextSize(3);
-    d.setCursor(0, 30);
+    d.setTextSize(2);
+    d.setCursor(0, 0);
     d.print(buf);
-
-    // Instructions
     d.setTextSize(1);
-    d.setCursor(0, 68);
+    d.setCursor(86, 4);
+    d.print(F("Phase 1"));
+
+    showCoverageGlobe();
+
+    d.setCursor(0, 118);
     d.print(F("FIRE:record DOWN:undo"));
-
-    // Coverage bar
-    showCoverageBar();
-
     d.display();
 }
 
-void CalibrationMode::showCoverageBar() {
-    // Draw an 8-column coverage bar at bottom of display
-    // Each column fills from bottom based on how many of 4 rows are covered
-    // Bar area: x=8..119, y=84..111 (28 pixels tall, 4px per row + outline)
+// Where the captured points sit, as "which way is down" relative to the
+// device: left disc = screen facing up, right disc = screen facing down.
+// Centre = flat, rim = on its side or laser vertical; laser points toward
+// the top of each disc. Lambert equal-area, so filled area tracks how much
+// of the sphere is covered. Dots are deliberately fat, clipped to their
+// disc, and points near the rim go on both discs: it's a rough guide to
+// gaps for someone following the instructions, not a score. Rendered
+// offline from the 2026-09-26 outdoor calibration: 56 points fill 99%/99%,
+// leaving out the screen-down poses leaves that disc 76% (a visible hole),
+// 28 points ~60-84%. Radius 12 rather than 10 closes the slivers the card's
+// quarter-turn rolls always leave (laser level, rolled ~45°, a pose it never
+// asks for) without hiding a real gap. The old 8x4 bar never filled even on
+// that excellent calibration (28/32 cells).
+void CalibrationMode::showCoverageGlobe() {
     auto &d = disp_->getDisplay();
+    constexpr int R = 27;   // disc radius (px)
+    constexpr int DOT = 12; // dot radius (px)
+    constexpr int CY = 64;
+    constexpr int CX[2] = {31, 96};
+    static const MagCal::Axes gravAxes(GRAV_AXES);
 
-    const int barX = 8, barY = 84, barW = 112, barH = 28;
-    const int colW = barW / COV_COLS; // 14px per column
-    const int rowH = 6;               // height per coverage row
-
-    // Outline
-    d.drawRect(barX, barY, barW, barH, SH110X_WHITE);
-
-    // Fill columns based on coverage
-    for (int c = 0; c < COV_COLS; c++) {
-        int filled = 0;
-        for (int r = 0; r < COV_ROWS; r++) {
-            if (coverageZones_[r][c]) {
-                filled++;
-            }
-        }
-
-        if (filled > 0) {
-            int fillH = filled * rowH;
-            int fillY = barY + barH - 1 - fillH;
-            d.fillRect(barX + 1 + c * colW, fillY, colW - 1, fillH, SH110X_WHITE);
-        }
-
-        // Column dividers
-        if (c > 0) {
-            d.drawFastVLine(barX + c * colW, barY, barH, SH110X_WHITE);
-        }
+    for (int h = 0; h < 2; h++) {
+        d.drawCircle(CX[h], CY, R, SH110X_WHITE);
     }
-
-    // Print coverage to serial periodically
-    if (iteration_ > 0 && iteration_ % 8 == 0) {
-        int total = 0;
-        for (int r = 0; r < COV_ROWS; r++) {
-            for (int cc = 0; cc < COV_COLS; cc++) {
-                if (coverageZones_[r][cc]) {
-                    total++;
+    for (const auto &g : gravArray_) {
+        Eigen::Vector3f v = gravAxes.fixAxes(g); // gravity (down), device frame
+        float n = v.norm();
+        if (n < 1e-3f) {
+            continue;
+        }
+        v /= n;
+        float rr = sqrtf(fmaxf(0.0f, 1.0f - fabsf(v.z()))); // 0 = flat, 1 = on edge
+        float hl = sqrtf(v.x() * v.x() + v.y() * v.y());
+        int dx = hl > 1e-6f ? (int)lroundf(R * rr * v.x() / hl) : 0;
+        int dy = hl > 1e-6f ? (int)lroundf(R * rr * v.y() / hl) : 0;
+        for (int h = 0; h < 2; h++) {
+            // screen up = gravity along -Z; near-edge points (within ~12°)
+            // count for both hemispheres
+            float side = (h == 0) ? -v.z() : v.z();
+            if (side <= -0.2f) {
+                continue;
+            }
+            // Filled dot, clipped to the disc so rim points don't spill out
+            int x0 = CX[h] + dx, y0 = CY - dy;
+            for (int y = y0 - DOT; y <= y0 + DOT; y++) {
+                for (int x = x0 - DOT; x <= x0 + DOT; x++) {
+                    int ux = x - x0, uy = y - y0, cx = x - CX[h], cy = y - CY;
+                    if (ux * ux + uy * uy <= DOT * DOT && cx * cx + cy * cy <= R * R) {
+                        d.drawPixel(x, y, SH110X_WHITE);
+                    }
                 }
             }
         }
-        Serial.print(F("Coverage: "));
-        Serial.print(total);
-        Serial.println(F("/32 zones"));
     }
+    d.setCursor(4, 95);
+    d.print(F("Screen up"));
+    d.setCursor(68, 95);
+    d.print(F("Screen dn"));
 }
 
 void CalibrationMode::showAlignmentProgress() {
@@ -818,39 +803,59 @@ void CalibrationMode::showResultsScreen() {
     }
 
     if (calMode_ == CalMode::PART1_ELLIPSOID) {
-        // Title
+        // Plain-language results: how good the heading from this fit is,
+        // whether the field was steady, and any points thrown out. (The old
+        // screen showed fit residuals — "Mag 0.00070" — and a Part 1 dip
+        // spread that reads ~1 deg even on a perfect calibration.)
+        const char *verdict = ConfigManager::CalMetrics::part1Verdict(headingErr95_);
+        bool wobbly = ConfigManager::CalMetrics::fieldWobbly(fieldWobblePct_);
+
         d.setTextSize(2);
         d.setCursor(0, 0);
-        d.println(F("Results"));
+        d.println(verdict);
 
         d.setTextSize(1);
-        // Ellipsoid-only results: uniformity metrics
-        d.setCursor(0, 28);
-        snprintf(buf, sizeof(buf), "Mag:  %.5f", (double)resultMagAcc_);
+        d.setCursor(0, 24);
+        snprintf(buf, sizeof(buf), "Heading +/-%.1f deg", (double)headingErr95_);
         d.println(buf);
-        d.setCursor(0, 40);
-        snprintf(buf, sizeof(buf), "Grav: %.5f", (double)resultGravAcc_);
-        d.println(buf);
-        d.setCursor(0, 52);
-        snprintf(buf, sizeof(buf), "Dip spread: %.1f deg", (double)resultDipSpread_);
-        d.println(buf);
-        if (rejectedCount_ > 0) {
-            d.setCursor(0, 62);
-            snprintf(buf, sizeof(buf), "Dropped %d bad pt%s", rejectedCount_, rejectedCount_ == 1 ? "" : "s");
+        d.setCursor(0, 36);
+        if (wobbly) {
+            snprintf(buf, sizeof(buf), "Field varies %.1f%%", (double)fieldWobblePct_);
+            d.println(buf);
+            d.println(F("  metal nearby?"));
+        } else {
+            snprintf(buf, sizeof(buf), "Field steady (%.1f%%)", (double)fieldWobblePct_);
             d.println(buf);
         }
+        d.setCursor(0, 58);
+        if (rejectedCount_ > 0) {
+            snprintf(buf, sizeof(buf), "Dropped %d bad pt%s", rejectedCount_, rejectedCount_ == 1 ? "" : "s");
+            d.println(buf);
+        } else {
+            d.println(F("No bad points"));
+        }
 
-        Serial.print(F("Results — Mag: "));
-        Serial.print(resultMagAcc_, 4);
-        Serial.print(F("  Grav: "));
-        Serial.println(resultGravAcc_, 4);
+        Serial.print(F("Results — "));
+        Serial.print(verdict);
+        Serial.print(F("  heading +/-"));
+        Serial.print(headingErr95_, 2);
+        Serial.print(F("  field "));
+        Serial.print(fieldWobblePct_, 2);
+        Serial.print(F("%  (uniformity mag "));
+        Serial.print(resultMagAcc_, 5);
+        Serial.print(F(" grav "));
+        Serial.print(resultGravAcc_, 5);
+        Serial.println(F(")"));
 
-        d.setCursor(0, 72);
+        d.setCursor(0, 76);
         d.println(F("Hold UP+DOWN: Save"));
-        d.setCursor(0, 84);
+        d.setCursor(0, 88);
         d.println(F("Hold DOWN: Discard"));
-        d.setCursor(0, 100);
-        d.println(F("Lower = Better"));
+        if (strcmp(verdict, "Redo") == 0 || wobbly) {
+            d.setCursor(0, 106);
+            d.println(F("Redo: wider poses,"));
+            d.println(F("away from metal."));
+        }
     } else {
         // Alignment / short cal results: accuracy only
         d.setTextSize(1);
@@ -946,14 +951,17 @@ void CalibrationMode::calculateEllipsoid() {
     // Set field characteristics for anomaly detection
     cal_->setFieldCharacteristics(magArray_, gravArray_);
 
-    std::vector<float> dipsDeg(magArray_.size());
-    for (size_t i = 0; i < magArray_.size(); i++) {
-        dipsDeg[i] = cal_->getDip(magArray_[i], gravArray_[i]);
+    // Field steadiness: every kept point should see the same field strength
+    fieldWobblePct_ = 0.0f;
+    for (const auto &m : magArray_) {
+        fieldWobblePct_ = fmaxf(fieldWobblePct_, fabsf(cal_->mag().apply(m).norm() - 1.0f) * 100.0f);
     }
-    resultDipSpread_ = sdOf(dipsDeg);
-    Serial.print(F("  Dip spread: "));
-    Serial.print(resultDipSpread_, 2);
-    Serial.print(F(" deg, points dropped: "));
+    estimateHeadingPrecision();
+    Serial.print(F("  Heading +/-"));
+    Serial.print(headingErr95_, 2);
+    Serial.print(F(" deg, field wobble "));
+    Serial.print(fieldWobblePct_, 2);
+    Serial.print(F("%, points dropped: "));
     Serial.println(rejectedCount_);
 
     uint32_t dt = millis() - t0;
@@ -1053,6 +1061,74 @@ void CalibrationMode::rejectEllipsoidOutliers() {
     }
     magArray_ = m;
     gravArray_ = g;
+}
+
+// Heading precision of the Part 1 fit, by jackknife: refit the magnetometer
+// ellipsoid once per point with that point left out and see how far the
+// heading of each captured pose moves. Reported as ~95% (2 sigma). Checked
+// offline against the 2026-09-26 outdoor calibration with injected noise:
+// it tracks the true error for noisy points (1% noise: 0.50 vs 0.54 deg
+// rms) but understates thin coverage — the globe display is for that.
+void CalibrationMode::estimateHeadingPrecision() {
+    headingErr95_ = 0.0f;
+    const size_t n = magArray_.size();
+    if (n < 12) {
+        return;
+    }
+    uint32_t t0 = millis();
+
+    // Poses to judge by: skip near-vertical ones, where azimuth is undefined
+    std::vector<size_t> eval;
+    std::vector<float> az0;
+    for (size_t i = 0; i < n; i++) {
+        MagCal::Angles a = cal_->getAngles(magArray_[i], gravArray_[i]);
+        if (fabsf(a.inclination) < 60.0f) {
+            eval.push_back(i);
+            az0.push_back(a.azimuth);
+        }
+    }
+    if (eval.empty()) {
+        return;
+    }
+
+    static MagCal::Calibration jk; // static: ~0.5 KB, 4 KB loop-task stack
+    std::vector<double> sum(eval.size(), 0.0), sumSq(eval.size(), 0.0);
+    std::vector<Eigen::Vector3f> m;
+    m.reserve(n - 1);
+    int fits = 0;
+    for (size_t leave = 0; leave < n; leave++) {
+        m.clear();
+        for (size_t i = 0; i < n; i++) {
+            if (i != leave) {
+                m.push_back(magArray_[i]);
+            }
+        }
+        jk = *cal_;
+        if (jk.mag().fitEllipsoid(m) < 0.0f) {
+            continue;
+        }
+        fits++;
+        for (size_t k = 0; k < eval.size(); k++) {
+            float az = jk.getAngles(magArray_[eval[k]], gravArray_[eval[k]]).azimuth;
+            double dd = wrapTo180(az - az0[k]);
+            sum[k] += dd;
+            sumSq[k] += dd * dd;
+        }
+    }
+    if (fits < 2) {
+        return;
+    }
+    double meanVar = 0.0;
+    for (size_t k = 0; k < eval.size(); k++) {
+        double var = (fits - 1.0) / fits * (sumSq[k] - sum[k] * sum[k] / fits);
+        meanVar += var > 0.0 ? var : 0.0;
+    }
+    headingErr95_ = 2.0f * (float)sqrt(meanVar / (double)eval.size());
+    Serial.print(F("  Jackknife: "));
+    Serial.print(fits);
+    Serial.print(F(" refits in "));
+    Serial.print(millis() - t0);
+    Serial.println(F(" ms"));
 }
 
 void CalibrationMode::calculateAlignment() {
@@ -1703,8 +1779,23 @@ bool CalibrationMode::saveCalibration() {
     Serial.print(F("  Binary save: "));
     Serial.println(binOk ? F("OK") : F("FAILED"));
 
-    // Save quality metrics for "View Last Cal" menu
-    ConfigManager::CalMetrics metrics = {resultMagAcc_, resultGravAcc_, resultAccuracy_};
+    // Quality record for Menu → View Last Cal. (This used to save the raw
+    // uniformity figures, and a Part 2 save wrote them as 0.)
+    ConfigManager::CalMetrics metrics;
+    if (calMode_ == CalMode::PART1_ELLIPSOID) {
+        metrics.part1Valid = true; // a new calibration: no Part 2 yet
+        metrics.headingErr95 = headingErr95_;
+        metrics.fieldWobblePct = fieldWobblePct_;
+        metrics.rejected = (int16_t)rejectedCount_;
+    } else {
+        if (!cfgMgr_->loadCalMetrics(metrics)) {
+            metrics = ConfigManager::CalMetrics(); // Part 1 from older firmware
+        }
+        metrics.part2Valid = true;
+        metrics.accuracy = resultAccuracy_;
+        metrics.dipSpread = resultDipSpread_;
+        metrics.envWarn = envWarn_;
+    }
     cfgMgr_->saveCalMetrics(metrics);
 
     return jsonOk && binOk;

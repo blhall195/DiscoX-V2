@@ -417,7 +417,7 @@ bool ConfigManager::loadCalMetrics(CalMetrics &m) {
     }
     int bytesRead = file.read(reinterpret_cast<uint8_t *>(&m), sizeof(m));
     file.close();
-    return bytesRead == (int)sizeof(m);
+    return bytesRead == (int)sizeof(m) && m.magic == CalMetrics::MAGIC;
 }
 
 // ── Pending readings ───────────────────────────────────────────────

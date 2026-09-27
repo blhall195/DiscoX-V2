@@ -119,11 +119,6 @@ class CalibrationMode {
     int iteration_ = 0;
     int targetCount_ = 56; // 56 for ellipsoid, 24 for alignment
 
-    // ── Coverage bar (ellipsoid only) ──
-    static constexpr int COV_COLS = 8;
-    static constexpr int COV_ROWS = 4;
-    bool coverageZones_[COV_ROWS][COV_COLS];
-
     // ── Save/discard hold detection ──
     float holdCounter_ = 0.0f;
     static constexpr float HOLD_TIME = 0.5f; // seconds to hold for save/discard
@@ -136,6 +131,8 @@ class CalibrationMode {
     float resultGravAcc_ = 0.0f;
     float resultAccuracy_ = 0.0f;
     int rejectedCount_ = 0;       // Part 1: points dropped as outliers
+    float headingErr95_ = 0.0f;   // Part 1: heading precision of the fit, ~95% (deg)
+    float fieldWobblePct_ = 0.0f; // Part 1: largest field-strength deviation (%)
     float resultDipSpread_ = 0.0f; // SD of per-point dip (deg) — the axis/
                                    // environment health check
     float envFieldRatio_ = 1.0f;  // Part 2 field / Part 1 field
@@ -205,14 +202,13 @@ class CalibrationMode {
     bool isConsistent(const Eigen::Vector3f *buffer, int count, float threshold) const;
     Eigen::Vector3f average(const Eigen::Vector3f *buffer, int count) const;
     void recordPoint(const Eigen::Vector3f &mag, const Eigen::Vector3f &grav);
-    void updateCoverageBar(const Eigen::Vector3f &grav);
 
     // ── Display helpers ──
     void showEllipsoidIntro();
     void showAlignmentIntro();
     void showEllipsoidScreen();
     void showAlignmentProgress();
-    void showCoverageBar();
+    void showCoverageGlobe();
     void showResultsScreen();
     void showSavingScreen();
     void showFBIntroScreen();
@@ -229,6 +225,7 @@ class CalibrationMode {
     // ── Calculation ──
     void calculateEllipsoid();
     void rejectEllipsoidOutliers();
+    void estimateHeadingPrecision();
     void calculateAlignment();
     bool saveCalibration();
 };

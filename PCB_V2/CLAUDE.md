@@ -222,12 +222,38 @@ What the calibration now does:
 - **Part 2 environment check** — Part 2's median field and dip must match
   Part 1 (±3%, ±2°), else the results screen says so. A Part 2 done half a
   metre from a radiator read +9% / −3° with a clean 0.18° accuracy.
-- **Dip spread** on both results screens. Part 2's accuracy figure only
-  sees rotation about the laser axis; it missed both the axis-mapping bug
-  and the radiator. Typical clean values (outdoors, UK): Part 1 ≈ 1° (it
-  is measured before Part 2 aligns the two sensors), Part 2 ≈ 0.1°; the
-  final calibration held dip to 67.2° ± 0.12° over all 80 points.
-- **Timeout** no longer records an unsettled point: triple beep, retry.
+- **Part 1 results** (2026-09-27) are in plain language: a verdict from
+  the **heading precision** of the fit (jackknife: 56 leave-one-out mag
+  refits, heading change at every non-vertical captured pose, shown as
+  ±2σ; ≤0.5° Excellent, ≤1° Good, else Redo), **field steadiness** (largest
+  field-strength deviation of a kept point; >2% says "metal nearby?") and
+  points dropped. Outdoor calibration: ±0.1°, 0.16%, 0. Validated offline
+  by injecting noise (tracks true error: 1% noise gave 0.50 vs 0.54° rms);
+  it understates thin coverage, which the collection globe covers. The
+  uniformity figures still go to serial. Part 1 no longer shows dip spread:
+  it reads ≈1° even on a perfect calibration, because Part 2 hasn't aligned
+  the sensors yet. Check the jackknife's run time on serial
+  ("Jackknife: N refits in X ms") when changing the fit.
+- **Menu → View Last Cal** shows the same wording as the results screens,
+  from `/cal_metrics.bin` (`ConfigManager::CalMetrics`, magic "CAM2"). A
+  Part 1 save starts a new record (Part 2 section cleared); a Part 2 save
+  fills in its section and keeps Part 1's. The verdict rules live in
+  `CalMetrics::part1Verdict`/`fieldWobbly`, shared by both screens. The old
+  file (three raw floats; Part 2 saves wrote Mag/Grav as 0) fails the magic
+  check and shows "No quality data" until the next calibration.
+- **Collection globe** replaces the 8×4 coverage bar (which filled 28/32
+  even on an excellent calibration): two discs, screen-up and screen-down,
+  of "which way is down" in the device frame, Lambert equal-area, fat dots
+  clipped to the disc (radius 12). It's a rough guide, not a score: 56 good
+  points fill ~99%, and a skipped set of poses leaves an obvious hole. At
+  radius 10 the card's quarter-turn rolls always left two small slivers
+  (laser level, rolled ~45°, never visited), which read as a mistake.
+- **Dip spread** on the Part 2 results screen. Part 2's accuracy figure
+  only sees rotation about the laser axis; it missed both the axis-mapping
+  bug and the radiator. Clean outdoor value ≈ 0.1°; the final calibration
+  held dip to 67.2° ± 0.12° over all 80 points.
+- **Timeout** no longer records an unsettled point: it plays the failed-shot
+  sound (`Sounds::error()`) and the user presses FIRE again.
 - **F/B check is read-only** (2026-09-27). It used to fit a sinusoidal
   residual hard-iron correction to the F/B pairs and shift `mag.centre_`.
   Bootstrapping the outdoor calibration put the residual that could fix at

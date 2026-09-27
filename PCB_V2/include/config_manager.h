@@ -77,10 +77,29 @@ class ConfigManager {
 
     // ── Calibration quality metrics ───────────────────────────────────
 
+    // Quality of the stored calibration, as shown on the results screens and
+    // under Menu → View Last Cal. Saving Part 1 starts a new record (Part 2
+    // section cleared); saving Part 2 fills in its section and keeps Part 1's.
     struct CalMetrics {
-        float mag;
-        float grav;
-        float accuracy;
+        static constexpr uint32_t MAGIC = 0x324D4143; // "CAM2"; older files
+                                                      // (3 raw floats) don't match
+        uint32_t magic = MAGIC;
+        // Part 1 (ellipsoid)
+        bool part1Valid = false;
+        float headingErr95 = 0.0f;   // heading precision of the fit, ~95% (deg)
+        float fieldWobblePct = 0.0f; // largest field-strength deviation (%)
+        int16_t rejected = 0;        // outlier points dropped
+        // Part 2 (alignment)
+        bool part2Valid = false;
+        float accuracy = 0.0f;   // roll-run spread (deg)
+        float dipSpread = 0.0f;  // SD of per-point dip (deg)
+        bool envWarn = false;    // Part 2 saw a different field from Part 1
+
+        // One rule for the results screen and View Last Cal
+        static const char *part1Verdict(float headingErr95) {
+            return headingErr95 <= 0.5f ? "Excellent" : headingErr95 <= 1.0f ? "Good" : "Redo";
+        }
+        static bool fieldWobbly(float fieldWobblePct) { return fieldWobblePct > 2.0f; }
     };
 
     // Save calibration quality metrics to /cal_metrics.bin.

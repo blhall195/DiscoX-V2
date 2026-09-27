@@ -138,8 +138,8 @@ void MenuManager::buildMenu() {
     // ── Enter Calibration submenu ────────────────────────────────
     _longCalSub.init(*_display, "Enter Calibration");
     _calSub.addSubmenu("Enter Calibration", &_longCalSub);
-    _calSub.addAction("F/B Check", enterFBCheck);
     _calSub.addAction("View Last Cal", viewLastCal);
+    _calSub.addAction("F/B Check", enterFBCheck);
     _calSub.addAction("Test Save", testCalSave);
     _calSub.addAction("<- Back", goToRoot);
 
@@ -371,36 +371,62 @@ void MenuManager::viewLastCal(int) {
     d.clearDisplay();
     d.setTextColor(SH110X_WHITE);
 
-    if (s_instance->_cfgMgr->loadCalMetrics(m)) {
-        d.setTextSize(2);
-        d.setCursor(0, 0);
-        d.println(F("Last Cal"));
+    d.setTextSize(2);
+    d.setCursor(0, 0);
+    d.println(F("Last Cal"));
+    d.setTextSize(1);
+    char buf[24];
 
-        char buf[24];
-        d.setTextSize(1);
-        d.setCursor(0, 28);
-        snprintf(buf, sizeof(buf), "Mag:  %.5f", (double)m.mag);
-        d.println(buf);
+    if (!s_instance->_cfgMgr->loadCalMetrics(m)) {
+        // Nothing saved yet, or saved by firmware before these metrics
         d.setCursor(0, 40);
-        snprintf(buf, sizeof(buf), "Grav: %.5f", (double)m.grav);
-        d.println(buf);
-        d.setCursor(0, 52);
-        snprintf(buf, sizeof(buf), "Acc:  %.3f deg", (double)m.accuracy);
-        d.println(buf);
-
-        d.setCursor(0, 72);
-        d.println(F("Lower = Better"));
-        d.setCursor(0, 100);
-        d.println(F("Any button to return"));
+        d.println(F("No quality data."));
+        d.println(F("Recalibrate to see"));
+        d.println(F("it here."));
     } else {
-        d.setTextSize(2);
-        d.setCursor(10, 40);
-        d.println(F("No data"));
-        d.setTextSize(1);
-        d.setCursor(0, 100);
-        d.println(F("Any button to return"));
+        // Same wording as the Part 1 / Part 2 results screens
+        int y = 20;
+        auto line = [&](const char *t) {
+            d.setCursor(0, y);
+            d.print(t);
+            y += 10;
+        };
+        if (m.part1Valid) {
+            snprintf(buf, sizeof(buf), "Phase 1: %s", ConfigManager::CalMetrics::part1Verdict(m.headingErr95));
+            line(buf);
+            snprintf(buf, sizeof(buf), " Heading +/-%.1f deg", (double)m.headingErr95);
+            line(buf);
+            if (ConfigManager::CalMetrics::fieldWobbly(m.fieldWobblePct)) {
+                snprintf(buf, sizeof(buf), " Field varies %.1f%%", (double)m.fieldWobblePct);
+            } else {
+                snprintf(buf, sizeof(buf), " Field steady (%.1f%%)", (double)m.fieldWobblePct);
+            }
+            line(buf);
+            if (m.rejected > 0) {
+                snprintf(buf, sizeof(buf), " Dropped %d bad pt%s", (int)m.rejected, m.rejected == 1 ? "" : "s");
+            } else {
+                snprintf(buf, sizeof(buf), " No bad points");
+            }
+            line(buf);
+        } else {
+            line("Phase 1: no data");
+        }
+
+        y = 64;
+        if (m.part2Valid) {
+            line("Phase 2:");
+            snprintf(buf, sizeof(buf), " Accuracy %.2f deg", (double)m.accuracy);
+            line(buf);
+            snprintf(buf, sizeof(buf), " Dip spread %.1f deg", (double)m.dipSpread);
+            line(buf);
+            line(m.envWarn ? " ! Field differed" : " Field matched Ph 1");
+        } else {
+            line("Phase 2: not done");
+        }
     }
 
+    d.setCursor(0, 118);
+    d.print(F("Any button to return"));
     d.display();
     s_instance->_viewingCalMetrics = true;
     s_instance->_lastActivity = millis();
