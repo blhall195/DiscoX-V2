@@ -450,13 +450,19 @@ void DisplayManager::drawErrorScreen() {
     }
     drawBattery(_battery);
 
-    // Headline, size 3, centred.
+    // Headline, size 3, centred. One too long for size 3 ("LOW SIGNAL") drops
+    // to size 2 rather than being truncated, re-centred in the same band.
     size_t hlen = strlen(_distText);
+    uint8_t hsize = 3;
     if (hlen > ERR_HEAD_MAX_CHARS) {
-        hlen = ERR_HEAD_MAX_CHARS;
+        hsize = 2;
+        if (hlen > ERR_BODY_COLS) {
+            hlen = ERR_BODY_COLS;
+        }
     }
-    _display.setTextSize(3);
-    _display.setCursor((SH1107_WIDTH - (int16_t)hlen * 18) / 2, ERR_HEAD_Y);
+    _display.setTextSize(hsize);
+    _display.setCursor((SH1107_WIDTH - (int16_t)hlen * 6 * hsize) / 2,
+                       ERR_HEAD_Y + (3 - hsize) * 4);
     for (size_t i = 0; i < hlen; i++) {
         _display.write(_distText[i]);
     }

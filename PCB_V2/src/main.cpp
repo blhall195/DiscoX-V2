@@ -1611,7 +1611,8 @@ static void pollMeasurement(uint32_t now) {
         }
         Serial.println();
         // Each failure has a different fix, so each gets its own headline
-        // (<=7 chars, size 3) and remedy (2 lines of <=10, size 2) filling
+        // (<=7 chars at size 3, or <=10 at size 2) and remedy (up to 3 lines
+        // of <=10, size 2) filling
         // the panel the stale readings used to share. Underground with cold
         // hands this has to be readable at a glance — the old LzrDIM/LzrBRT/
         // LzrRNG/LzrVAR codes needed the manual.
@@ -1619,8 +1620,8 @@ static void pollMeasurement(uint32_t now) {
         const char *detail = "Bad reply\nResetting";
         switch (lErr) {
         case LaserError::TOO_DIM:
-            code = "WEAK";
-            detail = "Dim target\nUse card";
+            code = "LOW SIGNAL";
+            detail = "Use\nreflective\ntarget";
             break;
         case LaserError::TOO_BRIGHT:
             code = "GLARE";

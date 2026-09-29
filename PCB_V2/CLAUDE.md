@@ -280,7 +280,10 @@ What the calibration now does:
   exactly the dark/specular targets it exists to catch. Note SQ also falls
   with distance, so a limit tuned up close will reject legitimate long shots;
   verify at survey range. Every shot logs `LZRSQ shot= mm= sq= st=` to serial
-  for threshold calibration. Background: `discox-sq-rejection-brief.md`
+  for threshold calibration. Limit lowered 50 → 30 on 2026-09-29 (details
+  in defaults.h): 50 rejected tape-verified shots, while SQ ≤15 gave readings
+  that agreed with each other but were wrong (half the true distance), so
+  don't add a "low SQ but shots agree" acceptance band. Background: `discox-sq-rejection-brief.md`
   (note that brief repeats the manual's inverted claim).
 
 - **config.json holds user settings only** (2026-09-26). Ten keys: `ble_name`,

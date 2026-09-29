@@ -46,7 +46,11 @@ constexpr bool laserWibble = true;              // blink laser on leg detect
 // returned only if enough survive and they agree within laserSpreadLimitMm.
 constexpr uint8_t laserShotsMax = 5;  // buffer size / settings clamp
 constexpr uint8_t laserShots = 1;     // default: single shot, SQ-gated — fast
-constexpr uint16_t laserSqLimit = 50;     // reject shots with SQ BELOW this; 0 = gate disabled
+// laserSqLimit tuned 2026-09-29 against a tape measure: SQ 30-49 read within
+// ~2 cm at 0.6/0.9/1.1 m (50 rejected them as WEAK); SQ <=15 was wrong, and
+// can be wrong consistently — three shots at SQ 10-15 on a dark target at
+// 1.9 m all read ~1.0 m, so repeat-and-agree doesn't rescue low SQ.
+constexpr uint16_t laserSqLimit = 30;     // reject shots with SQ BELOW this; 0 = gate disabled
 constexpr uint16_t laserSpreadLimitMm = 25;
 constexpr uint32_t laserMinDistanceMm = 30;     // module rated minimum
 constexpr uint32_t laserMaxDistanceMm = 100000; // rated max at reflectivity 1.0
