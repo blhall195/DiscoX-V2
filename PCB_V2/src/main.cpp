@@ -2234,7 +2234,13 @@ static void wakeFromStandby(const __FlashStringHelper *why) {
     if (standbyBackstop) {
         xTimerStop(standbyBackstop, 0);
     }
+    // Back to live compass/inclination, as FIRE's wake press does: a shot
+    // left frozen on screen before standby is stale by now
+    ctx.displayFrozen = false;
+    lastDistance = 0;
+    lastDisplayRefresh = 0; // live values on the next loop, not up to 250 ms later
     if (dispOk) {
+        display.updateSensorReadings(lastDistance, dispAz, dispInc);
         display.initScreen(); // redraw before the panel comes back on
         display.setSleep(false);
     }
@@ -2365,7 +2371,24 @@ static void servicePowerHold(uint32_t now) {
     }
     // Say what's happening before the screen goes dark
     static const char *const kLines[] = {"Standby", "mode"};
-    display.showPowerPrompt(kLines, 2, -1.0f, "Hold to shut down");
+    // "10 minutes", "45 seconds", "2 hours", from standby_timeout
+    const uint32_t secs = ctx.config.standbyTimeout;
+    uint32_t n;
+    const char *unit;
+    if (secs < 120) {
+        n = secs;
+        unit = "second";
+    } else if (secs % 3600 == 0) {
+        n = secs / 3600;
+        unit = "hour";
+    } else {
+        n = (secs + 30) / 60;
+        unit = "minute";
+    }
+    char hint[64];
+    snprintf(hint, sizeof(hint), "Powers down after\n%lu %s%s\nHold to shut down", (unsigned long)n, unit,
+             n == 1 ? "" : "s");
+    display.showPowerPrompt(kLines, 2, -1.0f, hint);
     standbyNotice = true;
     standbySince = now; // notice start; enterStandby() resets it
 }

@@ -217,10 +217,17 @@ void DisplayManager::showPowerPrompt(const char *const *lines, uint8_t count, fl
     }
     constexpr int16_t LINE_H = 20; // size-2 text is 16 px tall
     constexpr int16_t BAR_X = 14, BAR_W = 100, BAR_H = 14, BAR_GAP = 8;
-    constexpr int16_t HINT_GAP = 10, HINT_H = 8;
+    constexpr int16_t HINT_GAP = 10, HINT_LINE_H = 10; // size-1 text is 8 px tall
     const bool bar = progress >= 0.0f;
-    const int16_t blockH =
-        count * LINE_H - 4 + (bar ? BAR_GAP + BAR_H : 0) + (hint ? HINT_GAP + HINT_H : 0);
+    uint8_t hintLines = 0;
+    if (hint) {
+        hintLines = 1;
+        for (const char *c = hint; *c; c++) {
+            hintLines += (*c == '\n');
+        }
+    }
+    const int16_t hintH = hintLines ? HINT_GAP + hintLines * HINT_LINE_H - 2 : 0;
+    const int16_t blockH = count * LINE_H - 4 + (bar ? BAR_GAP + BAR_H : 0) + hintH;
     const int16_t y0 = (SH1107_HEIGHT - blockH) / 2;
 
     _display.clearDisplay();
@@ -240,11 +247,22 @@ void DisplayManager::showPowerPrompt(const char *const *lines, uint8_t count, fl
             _display.fillRect(BAR_X + 2, by + 2, fill, BAR_H - 4, SH110X_WHITE);
         }
     }
-    if (hint) {
-        const int16_t hy = y0 + blockH - HINT_H;
+    if (hint) { // '\n' separates lines, each centred
+        int16_t hy = y0 + blockH - hintH + HINT_GAP;
         _display.setTextSize(1);
-        _display.setCursor((SH1107_WIDTH - (int16_t)strlen(hint) * 6) / 2, hy);
-        _display.print(hint);
+        for (const char *line = hint; *line;) {
+            const char *end = strchr(line, '\n');
+            size_t len = end ? (size_t)(end - line) : strlen(line);
+            _display.setCursor((SH1107_WIDTH - (int16_t)len * 6) / 2, hy);
+            for (size_t i = 0; i < len; i++) {
+                _display.write(line[i]);
+            }
+            hy += HINT_LINE_H;
+            if (!end) {
+                break;
+            }
+            line = end + 1;
+        }
     }
     _display.display();
 }

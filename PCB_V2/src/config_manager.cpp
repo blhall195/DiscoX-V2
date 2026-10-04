@@ -1,7 +1,6 @@
 #include "config_manager.h"
 #include "config.h"
 #include "mag_cal/calibration.h"
-#include "splash.h"
 #include "usb_drive.h"
 
 #include <Adafruit_LittleFS.h>
@@ -176,13 +175,14 @@ bool ConfigManager::loadConfig(Config &cfg) {
     static const char *const kUserKeys[] = {
         "ble_name",         "screen_brightness", "auto_shutdown_timeout", "laser_timeout",
         "measure_from_front", "splays_enabled",  "laser_wibble",          "anomaly_detection",
-        "cartesian_tolerance", "steady_tolerance", "splash_style", "standby_timeout"};
+        "cartesian_tolerance", "steady_tolerance", "standby_timeout"};
     static const char *const kRetiredKeys[] = {
         "mag_tolerance", "grav_tolerance", "dip_tolerance", "stability_tolerance",
         "stability_buffer_length", "ema_alpha_stable", "ema_alpha_moving", "filter_tuning",
         "leg_angle_tolerance", "laser_distance_offset", "cal_mag_consistency",
         "cal_grav_consistency", "cal_buffer_length", "cal_settle_ms", "cal_ema_alpha",
-        "cal_timeout_ms", "laser_shots", "laser_sq_limit", "laser_spread_limit_mm"};
+        "cal_timeout_ms", "laser_shots", "laser_sq_limit", "laser_spread_limit_mm",
+        "splash_style"}; // splash is picked per release (Defaults::splashStyle), not a user setting
     loadMissing_ = false;
     for (const char *key : kUserKeys) {
         loadMissing_ |= doc[key].isNull();
@@ -205,8 +205,6 @@ bool ConfigManager::loadConfig(Config &cfg) {
     cfg.anomalyDetection = doc["anomaly_detection"] | Defaults::anomalyDetection;
     cfg.cartesianTolerance = doc["cartesian_tolerance"] | Defaults::cartesianTolerance;
     cfg.stabilityTolerance = doc["steady_tolerance"] | Defaults::stabilityTolerance;
-    int splash = doc["splash_style"] | (int)Defaults::splashStyle;
-    cfg.splashStyle = (splash >= 0 && splash < Splash::COUNT) ? (uint8_t)splash : Defaults::splashStyle;
     // Hand-editable on the USB drive: below ~0.5 deg a steady hand never
     // qualifies (tremor is 0.2-0.3 deg SD); above ~5 deg a shot can be taken
     // mid-swing and the averaged reading smears across the movement.
@@ -243,7 +241,6 @@ bool ConfigManager::saveConfig(const Config &cfg) {
     doc["anomaly_detection"] = cfg.anomalyDetection;
     doc["cartesian_tolerance"] = cfg.cartesianTolerance;
     doc["steady_tolerance"] = cfg.stabilityTolerance;
-    doc["splash_style"] = cfg.splashStyle;
     // Save only the user portion — SAP6_ prefix is always auto-prepended on load
     const char *nameToSave = (strncmp(cfg.bleName, "SAP6_", 5) == 0) ? cfg.bleName + 5 : cfg.bleName;
     doc["ble_name"] = nameToSave;

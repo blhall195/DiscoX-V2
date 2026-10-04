@@ -270,10 +270,12 @@ What the calibration now does:
 
 ## Boot splash (2026-10-03)
 
-Seven animations in `src/splash.cpp`, chosen by `splash_style` in
-config.json only (default 2, Mirror Ball; the numbers are listed in the USB
-drive's README.TXT). There was a menu picker; it was removed 2026-10-04 at
-the user's request. Each frame is a pure function of
+Seven animations in `src/splash.cpp`. **Not a user setting**: the style
+is `Defaults::splashStyle`, picked per firmware release so that updating
+brings a new animation (a reward for updating). v2.0.7 shipped Mirror Ball
+(2) as a user setting, `splash_style` in config.json; after it it became a
+retired key, which boot strips from config.json so a stored choice can't
+override the release's pick. The menu picker was removed 2026-10-04. Each frame is a pure function of
 elapsed ms; `Splash::play` loops clear → draw → `display()` and the ~45 ms
 I2C transfer sets the frame rate (~20 fps). Boot order: early `loadConfig()`
 (storage is already mounted) for style/name/brightness → sensors + battery →
@@ -300,7 +302,7 @@ straight port of it.
 - **Awake, holding the power button shows "Hold to power off"**
   (`beginPowerHold`; the bar appears after `POWER_BAR_DELAY_MS` so a tap
   doesn't flash it): held for `POWER_HOLD_OFF_MS` → clean `doShutdown()`.
-  Released sooner → "Standby mode / Hold to shut down" for
+  Released sooner → "Standby mode", "Powers down after <standby_timeout, as 10 minutes / 2 hours>" and "Hold to shut down" for
   `STANDBY_NOTICE_MS`, then standby. During that notice the power button
   starts the hold again and any other button cancels standby. Pending readings are synced and the flash cache flushed the
   moment the press is confirmed, because the LTC2954 also cuts power by
@@ -363,11 +365,10 @@ frozen.
   don't add a "low SQ but shots agree" acceptance band. Background: `discox-sq-rejection-brief.md`
   (note that brief repeats the manual's inverted claim).
 
-- **config.json holds user settings only** (2026-09-26). Twelve keys: `ble_name`,
+- **config.json holds user settings only** (2026-09-26). Eleven keys: `ble_name`,
   `screen_brightness`, `auto_shutdown_timeout`, `laser_timeout`,
   `measure_from_front`, `splays_enabled`, `laser_wibble`,
   `anomaly_detection`, `cartesian_tolerance`, `steady_tolerance`,
-  `splash_style` (0-6, `Splash::Style`; added 2026-10-03),
   `standby_timeout` (seconds, default 600, 0 = no standby; 2026-10-03). Every
   other `Config` field (EMA alphas, stability window, `cal_*`, anomaly
   thresholds, laser SQ/spread/shots, laser offset, leg angle tolerance) is a

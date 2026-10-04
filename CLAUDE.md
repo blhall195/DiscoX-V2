@@ -30,6 +30,11 @@ adding the new `.uf2`, rewriting the four version strings on `firmware.html`,
 and **building the site's changelog from the release notes body**. Brendan
 reviews that PR and merges; merging it deploys discox.co.uk.
 
+Each release also picks the start-up animation: set `Defaults::splashStyle`
+(`PCB_V2/include/defaults.h`; styles in `PCB_V2/src/splash.cpp`) to one the
+previous release didn't use. Users can't choose it, so a new animation is
+their reward for updating; say which one in the release notes.
+
 So when you tag, **write the release notes for cavers, not for git**. Top-level
 `-` bullets become the `<li>` items on the public firmware page. Say what was
 wrong, what it meant in the field, and whether the user has to do anything

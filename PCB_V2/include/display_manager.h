@@ -58,8 +58,8 @@ class DisplayManager {
     void blankScreen();
 
     /// Full-screen power prompt: up to 4 centred size-2 lines, plus a
-    /// progress bar underneath when progress >= 0 (0..1) and/or a size-1
-    /// hint line (max 21 chars). Used for the hold-to-power-on/off bars,
+    /// progress bar underneath when progress >= 0 (0..1) and/or size-1
+    /// hint text ('\n' between lines, max 21 chars each). Used for the hold-to-power-on/off bars,
     /// the standby notice and the "hold the button" notice.
     void showPowerPrompt(const char *const *lines, uint8_t count, float progress = -1.0f,
                          const char *hint = nullptr);

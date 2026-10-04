@@ -62,7 +62,9 @@ constexpr bool measureFromFront = false;        // false = Back (add offset), tr
 // whatever is in it; `splays_enabled` stays editable via USB drive mode.
 constexpr bool splaysEnabled = true;
 constexpr uint8_t screenBrightness = 255;       // OLED contrast 0-255
-constexpr uint8_t splashStyle = 2;              // boot animation, Splash::Style (2 = Mirror Ball); config.json only
+// Boot animation (Splash::Style). Not a user setting: picked per firmware
+// release, so updating brings a new one. 2 = Mirror Ball (v2.0.7).
+constexpr uint8_t splashStyle = 2;
 constexpr char bleName[] = "SAP6_DiscoX";
 constexpr uint8_t bleNameMaxLen = 20; // max chars for BLE name
 } // namespace Defaults
@@ -82,7 +84,7 @@ constexpr uint32_t LOOP_INTERVAL_MS = 10;    // main loop pace
 // Power button (see "Power button and standby" in CLAUDE.md)
 constexpr uint32_t POWER_HOLD_OFF_MS = 1500; // hold this long (bar) to power off
 constexpr uint32_t POWER_BAR_DELAY_MS = 250;  // bar appears only once a press is clearly a hold
-constexpr uint32_t STANDBY_NOTICE_MS = 1000;  // "Standby mode" shown before the screen goes off
+constexpr uint32_t STANDBY_NOTICE_MS = 1500;  // "Standby mode" shown before the screen goes off
 constexpr uint32_t POWER_HOLD_ON_MS = 1000;  // cold boot: keep holding this long after the MCU starts
 constexpr uint32_t POWER_TAP_NOTICE_MS = 2000; // "hold the button" notice before switching back off
 constexpr float BATTERY_SHUTDOWN_PCT = 5.0f;
