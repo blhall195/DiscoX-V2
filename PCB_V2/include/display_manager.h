@@ -57,15 +57,26 @@ class DisplayManager {
     /// Clear display to black
     void blankScreen();
 
+    /// Full-screen power prompt: up to 4 centred size-2 lines, plus a
+    /// progress bar underneath when progress >= 0 (0..1) and/or a size-1
+    /// hint line (max 21 chars). Used for the hold-to-power-on/off bars,
+    /// the standby notice and the "hold the button" notice.
+    void showPowerPrompt(const char *const *lines, uint8_t count, float progress = -1.0f,
+                         const char *hint = nullptr);
+
+    /// Panel off (standby) / back on. The buffer is kept, so the next
+    /// display() after waking shows whatever is drawn then.
+    void setSleep(bool sleep);
+
     /// Show "Starting Menu" message
     void showStartingMenu();
 
     /// Show "Device Initialising" message
     void showInitialisingMessage();
 
-    /// Show boot splash with laser beam on or off
-    /// nameSuffix: if non-null, shown instead of "Initialising..."
-    void showSplash(bool laserOn, const char *nameSuffix = nullptr);
+    /// Play the boot splash animation (Splash::Style, blocking ~1.5-2.7 s),
+    /// leaving its final frame — name, BLE suffix, version — on screen
+    void playSplash(uint8_t style, const char *nameSuffix = nullptr);
 
     /// Set OLED contrast/brightness (0-255)
     void setBrightness(uint8_t level);

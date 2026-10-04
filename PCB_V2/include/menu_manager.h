@@ -29,6 +29,13 @@ class MenuManager {
 
     bool isActive() const { return _active; }
 
+    /// Close the menu without running anything (power button → standby)
+    void close() {
+        _active = false;
+        _viewingCalMetrics = false;
+        _exitAction = MenuExitAction::NONE;
+    }
+
     /// Check what action was requested when menu became inactive
     MenuExitAction exitAction() const { return _exitAction; }
 

@@ -268,6 +268,83 @@ What the calibration now does:
   a 5 m leg is ~0.5°. Legs with |inc| > 70° count for inclination only.
   Hold DOWN exits straight back to normal mode (no save, no reboot).
 
+## Boot splash (2026-10-03)
+
+Seven animations in `src/splash.cpp`, chosen by `splash_style` in
+config.json only (default 2, Mirror Ball; the numbers are listed in the USB
+drive's README.TXT). There was a menu picker; it was removed 2026-10-04 at
+the user's request. Each frame is a pure function of
+elapsed ms; `Splash::play` loops clear → draw → `display()` and the ~45 ms
+I2C transfer sets the frame rate (~20 fps). Boot order: early `loadConfig()`
+(storage is already mounted) for style/name/brightness → sensors + battery →
+splash (blocking) → main screen with empty readings → storage (~0.8 s) and
+BLE (~0.5 s) → live readings. Showing the main screen during that last
+stretch is what stops the splash's final frame from freezing. Running the
+splash on a background task instead (own DMA flush, so it wouldn't starve
+setup) was tried 2026-10-03 and looked laggy on the device — don't revisit.
+Concepts were designed in a browser mock-up of the panel, and the C++ is a
+straight port of it.
+
+## Power button and standby (2026-10-03)
+
+- **Cold power-on is a hold.** `bootHoldGate()` (very start of setup(),
+  before the laser probe and any storage access) shows "Hold to power on"
+  with a bar for `Timing::POWER_HOLD_ON_MS`; releasing early shows "Hold the
+  power button to turn on" and powers straight back off. Skipped with USB
+  power present (charging, flashing, post-update reboots) and after any
+  non-power-on reset. **Fail-safe:** if INT is never LOW in the first 30 ms
+  it boots normally, because the LTC2954's INT behaviour during the power-on
+  press is unverified and a wrong guess would make a device that never
+  turns on. Boot serial prints `BOOTHOLD:` with what it saw: check it on
+  hardware before relying on the tap notice.
+- **Awake, holding the power button shows "Hold to power off"**
+  (`beginPowerHold`; the bar appears after `POWER_BAR_DELAY_MS` so a tap
+  doesn't flash it): held for `POWER_HOLD_OFF_MS` → clean `doShutdown()`.
+  Released sooner → "Standby mode / Hold to shut down" for
+  `STANDBY_NOTICE_MS`, then standby. During that notice the power button
+  starts the hold again and any other button cancels standby. Pending readings are synced and the flash cache flushed the
+  moment the press is confirmed, because the LTC2954 also cuts power by
+  itself on a long enough hold (threshold set by a board capacitor, value
+  not yet measured), so the bar may not get to finish. `POWER: released
+  after N ms` on serial shows whether INT stays LOW while held.
+  Calibration and snake get no bar (a release must not wipe their
+  screen); hold to power off, a short press does nothing. With
+  `standby_timeout` 0 a short press also does nothing. The modal
+  storage-repair and USB-drive screens still power off on a press
+  (`pollPowerButton`).
+- **Standby**: laser, screen (SH1107 display-off), LEDs, melody off; BLE
+  link kept, phone commands dropped. **Any button wakes it** (the waking
+  button is swallowed until released, so it can't also take a shot or
+  toggle disco); the power button wakes and starts the hold bar (release →
+  stays awake). After `standby_timeout` seconds (config.json, default 600,
+  0 = disabled, capped at 24 h) it calls `doShutdown()`. Inactivity
+  auto-off, low battery and BLE DEVICE_OFF still power off fully.
+
+**The risk it adds, and the safety net.** A hang while the screen is off
+looks like "off" while the rails stay up, so the battery drains flat
+unnoticed. Three layers (comment at `standbyActive`, main.cpp):
+1. Standby does almost nothing. Reading delivery (`pollBLEDrain`, which
+   writes flash — the one known hang) pauses until wake; entering standby
+   syncs pending readings and flushes the flash page cache first.
+2. A FreeRTOS one-shot timer cuts power `timeout + 60 s` after entry if the
+   loop hasn't. It runs in the timer task (priority 2, above the loop
+   task), so a stuck loop can't stop it.
+3. `HardFault`/`MemManage`/`BusFault`/`UsageFault` handlers and
+   `__assert_func` drive KILL by bare register writes when in standby
+   (outside standby they behave as before: halt / repair-screen reboot).
+
+Not covered: a hang inside the higher-priority BLE tasks, or with
+interrupts disabled. Only the WDT catches those, and it was rejected: it
+can't be stopped once started, so every long blocking path (splash,
+calibration, USB drive, DFU) would have to feed it for the rest of the
+session.
+
+Bench tests, standby only, over serial: `H` hangs the loop and re-arms the
+backstop for 20 s; `X` hard-faults after 10 s. Unplug USB straight after
+sending, since USB power can keep the board up past KILL. Pass: the
+device is off (a short power press cold-boots with the splash) rather than
+frozen.
+
 ## Gotchas (inherited + new)
 
 - **LDJ-100 signal quality is inverted from its own manual.** The manual says
@@ -286,10 +363,12 @@ What the calibration now does:
   don't add a "low SQ but shots agree" acceptance band. Background: `discox-sq-rejection-brief.md`
   (note that brief repeats the manual's inverted claim).
 
-- **config.json holds user settings only** (2026-09-26). Ten keys: `ble_name`,
+- **config.json holds user settings only** (2026-09-26). Twelve keys: `ble_name`,
   `screen_brightness`, `auto_shutdown_timeout`, `laser_timeout`,
   `measure_from_front`, `splays_enabled`, `laser_wibble`,
-  `anomaly_detection`, `cartesian_tolerance`, `steady_tolerance`. Every
+  `anomaly_detection`, `cartesian_tolerance`, `steady_tolerance`,
+  `splash_style` (0-6, `Splash::Style`; added 2026-10-03),
+  `standby_timeout` (seconds, default 600, 0 = no standby; 2026-10-03). Every
   other `Config` field (EMA alphas, stability window, `cal_*`, anomaly
   thresholds, laser SQ/spread/shots, laser offset, leg angle tolerance) is a
   firmware constant from `Defaults::` — `loadConfig()` starts from

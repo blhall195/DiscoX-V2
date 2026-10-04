@@ -1,6 +1,6 @@
 #include "display_manager.h"
 
-#include "version.h"
+#include "splash.h"
 
 // ── Layout constants (match Python display_manager.py positions) ────
 // Battery icon — top-right
@@ -115,7 +115,39 @@ static constexpr int16_t DEG_OFFSET_Y = 3; // down from top of text line
 
 // ── Public API ─────────────────────────────────────────────────────
 
+// Zero the panel's display RAM over raw I2C, before Adafruit's begin().
+// The SH1107's RAM holds random data after a cold power-up, and begin()
+// switches the display on (after a 100 ms wait) without writing it — so
+// until our first display() lands, ~45 ms later, a cold boot showed a
+// screenful of static. Warm resets never did: the panel stays powered and
+// keeps its last image. RAM writes are accepted while the display is still
+// off (its power-on state), so begin() now turns on a blank screen.
+// Page addressing is the power-on default; the commands match
+// Adafruit_SH110X::display(). Costs ~45 ms of boot; a NACK just skips it.
+static void blankPanelRam() {
+    constexpr uint8_t CHUNK = 32; // Wire's TX buffer is 64 bytes
+    for (uint8_t page = 0; page < SH1107_HEIGHT / 8; page++) {
+        Wire.beginTransmission(SH1107_ADDR);
+        Wire.write(0x00);                 // control byte: commands follow
+        Wire.write((uint8_t)(0xB0 + page)); // page address
+        Wire.write(0x10);                 // column address high nibble = 0
+        Wire.write(0x00);                 // column address low nibble = 0
+        if (Wire.endTransmission() != 0) {
+            return; // panel not answering — begin() will report it
+        }
+        for (uint8_t col = 0; col < SH1107_WIDTH; col += CHUNK) {
+            Wire.beginTransmission(SH1107_ADDR);
+            Wire.write(0x40); // control byte: display data follows
+            for (uint8_t i = 0; i < CHUNK; i++) {
+                Wire.write(0x00);
+            }
+            Wire.endTransmission();
+        }
+    }
+}
+
 bool DisplayManager::begin() {
+    blankPanelRam();
     if (!_display.begin(SH1107_ADDR, true)) {
         return false;
     }
@@ -179,6 +211,51 @@ void DisplayManager::updateBTNumber(uint16_t pending) { _btPending = pending; }
 
 void DisplayManager::updateMeasureFrom(bool front) { _measureFromFront = front; }
 
+void DisplayManager::showPowerPrompt(const char *const *lines, uint8_t count, float progress, const char *hint) {
+    if (!_initialized) {
+        return;
+    }
+    constexpr int16_t LINE_H = 20; // size-2 text is 16 px tall
+    constexpr int16_t BAR_X = 14, BAR_W = 100, BAR_H = 14, BAR_GAP = 8;
+    constexpr int16_t HINT_GAP = 10, HINT_H = 8;
+    const bool bar = progress >= 0.0f;
+    const int16_t blockH =
+        count * LINE_H - 4 + (bar ? BAR_GAP + BAR_H : 0) + (hint ? HINT_GAP + HINT_H : 0);
+    const int16_t y0 = (SH1107_HEIGHT - blockH) / 2;
+
+    _display.clearDisplay();
+    _display.setTextColor(SH110X_WHITE);
+    _display.setTextSize(2);
+    for (uint8_t i = 0; i < count; i++) {
+        int16_t w = (int16_t)strlen(lines[i]) * 12;
+        _display.setCursor((SH1107_WIDTH - w) / 2, y0 + i * LINE_H);
+        _display.print(lines[i]);
+    }
+    if (bar) {
+        const int16_t by = y0 + count * LINE_H - 4 + BAR_GAP;
+        float p = progress > 1.0f ? 1.0f : progress;
+        _display.drawRoundRect(BAR_X, by, BAR_W, BAR_H, 4, SH110X_WHITE);
+        int16_t fill = (int16_t)(p * (BAR_W - 4));
+        if (fill > 0) {
+            _display.fillRect(BAR_X + 2, by + 2, fill, BAR_H - 4, SH110X_WHITE);
+        }
+    }
+    if (hint) {
+        const int16_t hy = y0 + blockH - HINT_H;
+        _display.setTextSize(1);
+        _display.setCursor((SH1107_WIDTH - (int16_t)strlen(hint) * 6) / 2, hy);
+        _display.print(hint);
+    }
+    _display.display();
+}
+
+void DisplayManager::setSleep(bool sleep) {
+    if (!_initialized) {
+        return;
+    }
+    _display.oled_command(sleep ? SH110X_DISPLAYOFF : SH110X_DISPLAYON);
+}
+
 void DisplayManager::blankScreen() {
     if (!_initialized) {
         return;
@@ -219,131 +296,11 @@ void DisplayManager::showInitialisingMessage() {
     _display.display();
 }
 
-void DisplayManager::showSplash(bool laserOn, const char *nameSuffix) {
+void DisplayManager::playSplash(uint8_t style, const char *nameSuffix) {
     if (!_initialized) {
         return;
     }
-
-    _display.clearDisplay();
-    _display.setTextColor(SH110X_WHITE);
-
-    // ── "DiscoX" title — text size 3, centred ───────────────────
-    _display.setTextSize(3);
-    _display.setCursor(10, 8);
-    _display.print(F("DiscoX"));
-
-    // ── Device silhouette (logo) ────────────────────────────────
-    // The logo has concave TOP and BOTTOM edges (dipping inward toward
-    // the centre) with relatively straight vertical sides and rounded
-    // corners.  We trace the outline by computing the top-edge Y and
-    // bottom-edge Y as functions of X.
-    static constexpr int16_t BODY_CX = 46; // centre X of body
-    static constexpr int16_t BODY_CY = 64; // centre Y of body
-    static constexpr int16_t BODY_HW = 40; // half-width
-    static constexpr int16_t BODY_HH = 20; // half-height at the sides
-    static constexpr int16_t SCOOP = 6;    // how far top/bottom edges dip inward
-
-    // Given an X position, return the half-height of the body at that X.
-    // Two smooth dips with sharp pointed cusps where the curves meet
-    // (at left edge, centre, and right edge).
-    auto bodyHH = [&](int16_t x) -> float {
-        float t = (float)(x - (BODY_CX - BODY_HW)) / (float)(2 * BODY_HW); // 0..1
-        return BODY_HH - SCOOP * fabsf(sinf(2.0f * 3.14159f * t));
-    };
-
-    // Trace top and bottom edges column by column (2-pass for thickness)
-    for (int pass = 0; pass < 2; pass++) {
-        float inset = (float)pass;
-        int16_t prevTy = -1, prevBy = -1;
-        for (int16_t x = BODY_CX - BODY_HW; x <= BODY_CX + BODY_HW; x++) {
-            float hh = bodyHH(x) - inset;
-            int16_t ty = BODY_CY - (int16_t)hh; // top edge Y
-            int16_t by = BODY_CY + (int16_t)hh; // bottom edge Y
-
-            // Draw top and bottom edge pixels
-            _display.drawPixel(x, ty, SH110X_WHITE);
-            _display.drawPixel(x, by, SH110X_WHITE);
-
-            // Left and right extremes: draw full vertical span
-            if (x == BODY_CX - BODY_HW + pass || x == BODY_CX + BODY_HW - pass) {
-                _display.drawLine(x, ty, x, by, SH110X_WHITE);
-            }
-
-            // Connect to previous column to fill gaps in the curve
-            if (prevTy >= 0) {
-                if (ty != prevTy) {
-                    _display.drawLine(x - 1, min(ty, prevTy), x, max(ty, prevTy), SH110X_WHITE);
-                }
-                if (by != prevBy) {
-                    _display.drawLine(x - 1, min(by, prevBy), x, max(by, prevBy), SH110X_WHITE);
-                }
-            }
-            prevTy = ty;
-            prevBy = by;
-        }
-    }
-
-    // ── 4 button squares (no surrounding frame) ──────────────────
-    static constexpr int16_t BTN_SIZE = 8;
-    static constexpr int16_t BTN_GAP = 2;
-    static constexpr int16_t BTN_X0 = BODY_CX - BODY_HW + 8;
-    static constexpr int16_t BTN_Y0 = BODY_CY - BTN_SIZE / 2;
-
-    for (int i = 0; i < 4; i++) {
-        int16_t bx = BTN_X0 + i * (BTN_SIZE + BTN_GAP);
-        _display.drawRoundRect(bx, BTN_Y0, BTN_SIZE, BTN_SIZE, 2, SH110X_WHITE);
-    }
-
-    // ── Disco square — slightly shorter, centred on right side ──────
-    static constexpr int16_t DSQ_W = 22;
-    static constexpr int16_t DSQ_H = 18;
-    static constexpr int16_t DSQ_X = BTN_X0 + 4 * (BTN_SIZE + BTN_GAP) + 4;
-    static constexpr int16_t DSQ_Y = BODY_CY - DSQ_H / 2;
-
-    _display.drawRoundRect(DSQ_X, DSQ_Y, DSQ_W, DSQ_H, 4, SH110X_WHITE);
-
-    // ── Laser beam — flashing on/off as the device loads ──────────
-    static constexpr int16_t BEAM_Y = BODY_CY;
-    static constexpr int16_t BEAM_X0 = BODY_CX + BODY_HW + 2;
-    static constexpr int16_t BEAM_X1 = 112;
-
-    if (laserOn) {
-        // Main beam (2px thick)
-        _display.drawLine(BEAM_X0, BEAM_Y, BEAM_X1, BEAM_Y, SH110X_WHITE);
-        _display.drawLine(BEAM_X0, BEAM_Y - 1, BEAM_X1, BEAM_Y - 1, SH110X_WHITE);
-
-        // Starburst at the tip
-        static constexpr int16_t STAR_CX = BEAM_X1 + 2;
-        static constexpr int16_t STAR_CY = BEAM_Y;
-        static constexpr int16_t RAY_LEN = 8;
-
-        static constexpr float RAY_ANGLES[] = {0.0f,    0.7854f, 1.5708f, 2.3562f,
-                                               3.1416f, 3.9270f, 4.7124f, 5.4978f};
-        for (float a : RAY_ANGLES) {
-            int16_t ex = STAR_CX + (int16_t)(cosf(a) * RAY_LEN);
-            int16_t ey = STAR_CY + (int16_t)(sinf(a) * RAY_LEN);
-            _display.drawLine(STAR_CX, STAR_CY, ex, ey, SH110X_WHITE);
-        }
-        _display.fillCircle(STAR_CX, STAR_CY, 2, SH110X_WHITE);
-    }
-
-    // ── Bottom text: BLE name suffix (blank until config loaded) ───
-    _display.setTextSize(1);
-    if (nameSuffix && nameSuffix[0]) {
-        // Centre the name suffix on the 128-px wide screen (6px per char at size 1)
-        int16_t tw = (int16_t)strlen(nameSuffix) * 6;
-        _display.setCursor((128 - tw) / 2, 108);
-        _display.print(nameSuffix);
-    }
-
-    // ── Firmware version, under the name ───────────────────────────
-    // Fixed line so it does not jump when the name appears: the first splash
-    // is drawn before the config is loaded and has no suffix yet.
-    int16_t vw = (int16_t)strlen(FIRMWARE_VERSION) * 6;
-    _display.setCursor((128 - vw) / 2, 118);
-    _display.print(FIRMWARE_VERSION);
-
-    _display.display();
+    Splash::play(_display, style, nameSuffix);
 }
 
 void DisplayManager::refresh() {

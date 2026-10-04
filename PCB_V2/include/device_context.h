@@ -38,6 +38,7 @@ struct Config {
     uint16_t calTimeoutMs = Defaults::calTimeoutMs;
     uint32_t autoShutdownTimeout = Defaults::autoShutdownTimeout;
     uint32_t laserTimeout = Defaults::laserTimeout;
+    uint32_t standbyTimeout = Defaults::standbyTimeout;
     bool laserWibble = Defaults::laserWibble;
     uint8_t laserShots = Defaults::laserShots;
     uint16_t laserSqLimit = Defaults::laserSqLimit;
@@ -45,6 +46,7 @@ struct Config {
     bool measureFromFront = Defaults::measureFromFront;
     bool splaysEnabled = Defaults::splaysEnabled;
     uint8_t screenBrightness = Defaults::screenBrightness;
+    uint8_t splashStyle = Defaults::splashStyle;
     char bleName[Defaults::bleNameMaxLen + 1] = {}; // initialized in constructor
 
     Config() {

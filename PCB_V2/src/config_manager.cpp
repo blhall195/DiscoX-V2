@@ -1,6 +1,7 @@
 #include "config_manager.h"
 #include "config.h"
 #include "mag_cal/calibration.h"
+#include "splash.h"
 #include "usb_drive.h"
 
 #include <Adafruit_LittleFS.h>
@@ -175,7 +176,7 @@ bool ConfigManager::loadConfig(Config &cfg) {
     static const char *const kUserKeys[] = {
         "ble_name",         "screen_brightness", "auto_shutdown_timeout", "laser_timeout",
         "measure_from_front", "splays_enabled",  "laser_wibble",          "anomaly_detection",
-        "cartesian_tolerance", "steady_tolerance"};
+        "cartesian_tolerance", "steady_tolerance", "splash_style", "standby_timeout"};
     static const char *const kRetiredKeys[] = {
         "mag_tolerance", "grav_tolerance", "dip_tolerance", "stability_tolerance",
         "stability_buffer_length", "ema_alpha_stable", "ema_alpha_moving", "filter_tuning",
@@ -194,12 +195,18 @@ bool ConfigManager::loadConfig(Config &cfg) {
     cfg.screenBrightness = doc["screen_brightness"] | (int)Defaults::screenBrightness;
     cfg.autoShutdownTimeout = doc["auto_shutdown_timeout"] | Defaults::autoShutdownTimeout;
     cfg.laserTimeout = doc["laser_timeout"] | Defaults::laserTimeout;
+    cfg.standbyTimeout = doc["standby_timeout"] | Defaults::standbyTimeout;
+    if (cfg.standbyTimeout > 86400) { // 24 h cap keeps the standby timer maths in range
+        cfg.standbyTimeout = 86400;
+    }
     cfg.measureFromFront = doc["measure_from_front"] | Defaults::measureFromFront;
     cfg.splaysEnabled = doc["splays_enabled"] | Defaults::splaysEnabled;
     cfg.laserWibble = doc["laser_wibble"] | Defaults::laserWibble;
     cfg.anomalyDetection = doc["anomaly_detection"] | Defaults::anomalyDetection;
     cfg.cartesianTolerance = doc["cartesian_tolerance"] | Defaults::cartesianTolerance;
     cfg.stabilityTolerance = doc["steady_tolerance"] | Defaults::stabilityTolerance;
+    int splash = doc["splash_style"] | (int)Defaults::splashStyle;
+    cfg.splashStyle = (splash >= 0 && splash < Splash::COUNT) ? (uint8_t)splash : Defaults::splashStyle;
     // Hand-editable on the USB drive: below ~0.5 deg a steady hand never
     // qualifies (tremor is 0.2-0.3 deg SD); above ~5 deg a shot can be taken
     // mid-swing and the averaged reading smears across the movement.
@@ -229,12 +236,14 @@ bool ConfigManager::saveConfig(const Config &cfg) {
     doc["screen_brightness"] = (int)cfg.screenBrightness;
     doc["auto_shutdown_timeout"] = cfg.autoShutdownTimeout;
     doc["laser_timeout"] = cfg.laserTimeout;
+    doc["standby_timeout"] = cfg.standbyTimeout;
     doc["measure_from_front"] = cfg.measureFromFront;
     doc["splays_enabled"] = cfg.splaysEnabled;
     doc["laser_wibble"] = cfg.laserWibble;
     doc["anomaly_detection"] = cfg.anomalyDetection;
     doc["cartesian_tolerance"] = cfg.cartesianTolerance;
     doc["steady_tolerance"] = cfg.stabilityTolerance;
+    doc["splash_style"] = cfg.splashStyle;
     // Save only the user portion — SAP6_ prefix is always auto-prepended on load
     const char *nameToSave = (strncmp(cfg.bleName, "SAP6_", 5) == 0) ? cfg.bleName + 5 : cfg.bleName;
     doc["ble_name"] = nameToSave;

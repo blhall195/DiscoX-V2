@@ -114,6 +114,54 @@ bool flashOk = false;
 // LittleFS and trips the same assert in Bluefruit.begin() (tried on the
 // damaged unit, 2026-09-25 — it just looped back to the prompt).
 static constexpr uint8_t STORAGE_FAULT_MARK = 0xA7;
+
+// ── Standby (power button in normal mode / menu) ────────────────────
+// A press puts the device in standby — laser, screen and LEDs off, BLE link
+// kept — so the next press is back on the reading screen instantly instead
+// of rebooting. After config.standbyTimeout seconds it powers off for real.
+// A long hold still hard-kills via the LTC2954.
+//
+// The risk standby adds: a firmware hang while the screen is off looks
+// exactly like "off", and with KILL never driven the battery drains flat.
+// Three layers stop that:
+//   1. Standby does almost nothing — button, BLE upkeep. No flash writes
+//      (reading delivery pauses until wake), the one known way to hang.
+//   2. A FreeRTOS timer (timer task, above the loop task's priority) cuts
+//      power a minute after the timeout if the loop hasn't already: it
+//      still runs when the loop task is stuck.
+//   3. Fault handlers and the assert hook cut power when in standby,
+//      rather than halting/rebooting with the rails up.
+// Not covered: a hang inside the higher-priority BLE tasks, or with
+// interrupts disabled — that would need the WDT, which can't be stopped
+// once started and was judged the bigger risk. Serial 'H'/'X' in standby
+// test layers 2 and 3 on the bench (see serviceStandby).
+static volatile bool standbyActive = false;
+static uint32_t standbySince = 0;
+
+// Drive KILL LOW with bare register writes — safe from a fault handler,
+// where nothing else (Arduino API, the PowerControl object) can be trusted.
+static_assert(PIN_KILL < 32, "killPowerNow assumes KILL is on port P0");
+[[noreturn]] static void killPowerNow() {
+    NRF_P0->OUTCLR = (1UL << PIN_KILL);
+    NRF_P0->DIRSET = (1UL << PIN_KILL);
+    while (true) {
+        NRF_P0->OUTCLR = (1UL << PIN_KILL);
+    }
+}
+
+// Replace the core's default fault handlers (an infinite loop). Outside
+// standby they still halt — a frozen screen is visible — but in standby a
+// halt would look like "off" while draining the battery.
+extern "C" void HardFault_Handler(void) {
+    if (standbyActive) {
+        killPowerNow();
+    }
+    while (true) {
+    }
+}
+extern "C" void MemoryManagement_Handler(void) { HardFault_Handler(); }
+extern "C" void BusFault_Handler(void) { HardFault_Handler(); }
+extern "C" void UsageFault_Handler(void) { HardFault_Handler(); }
 static UsbDrive::RestoreResult bootRestore; // what syncBackups() put back
 
 static void setStorageFaultMark() {
@@ -145,6 +193,9 @@ static void assertSpinMs(uint32_t ms) {
 }
 
 extern "C" [[noreturn]] void __assert_func(const char *file, int line, const char *func, const char *expr) {
+    if (standbyActive) {
+        killPowerNow(); // storage is checked at the next power-on instead
+    }
     Serial.print(F("assertion \""));
     Serial.print(expr ? expr : "?");
     Serial.print(F("\" failed: file \""));
@@ -299,7 +350,20 @@ static void initCalibration();
 static void initDisco();
 
 // ── Forward declarations — polling ──────────────────────────────────
+static bool powerButtonPressed(uint32_t now);
 static void pollPowerButton(uint32_t now);
+static void enterStandby(uint32_t now);
+static void serviceStandby(uint32_t now);
+static void beginPowerHold(uint32_t now, bool fromStandby);
+static void servicePowerHold(uint32_t now);
+static bool swallowWakeButtons();
+static void bootHoldGate();
+static bool pwrHolding = false; // power button down, hold bar showing
+static bool standbyNotice = false; // "Standby mode" showing, standby imminent
+static void serviceStandbyNotice(uint32_t now);
+enum class BootHold : uint8_t { SKIPPED, NO_INT, HELD }; // bootHoldGate() outcome
+static BootHold bootHoldResult = BootHold::SKIPPED;
+static uint32_t bootHoldIntMs = 0; // ms after setup() start INT was first LOW
 static void readSensorsUpdate(uint32_t now);
 static void syncDiscoToMelody();
 static void pollButtons(uint32_t now);
@@ -353,16 +417,21 @@ void setup() {
     buzzer.begin(PIN_BUZZER_A, PIN_BUZZER_B);
     Sounds::begin(buzzer);
 
-    // Init laser so it can be turned off immediately (rail is ENA-gated and
-    // already up; the LDJ-100 boots with the diode off, so this is belt+braces).
-    initLaser();
-
-    // Get display up ASAP — before serial, which can block on USB enumeration.
+    // Get display up ASAP — before serial, which can block on USB enumeration,
+    // and before the laser probe (up to ~2.5 s on a cold boot), so the
+    // hold-to-power-on bar can appear while the button is still down.
     // V2 I2C pins are NOT the variant defaults — must be routed before begin().
     Wire.setPins(PIN_I2C_SDA, PIN_I2C_SCL);
     Wire.begin();
     Wire.setClock(400000);
     initDisplay();
+
+    // Cold power-on must be a hold, not a tap (may switch straight back off)
+    bootHoldGate();
+
+    // Init laser so it can be turned off immediately (rail is ENA-gated and
+    // already up; the LDJ-100 boots with the diode off, so this is belt+braces).
+    initLaser();
 
     // Configure button pull-ups BEFORE reading them
     pinMode(PIN_BTN_FIRE, INPUT_PULLUP);
@@ -413,8 +482,14 @@ void setup() {
         }
     }
 
-    // Normal boot — show splash screen
-    display.showSplash(false);
+    // Normal boot. The splash style, BLE name and brightness come from an
+    // early read of config.json (storage is already mounted above);
+    // initFlash() reloads it properly after any USB import / backup restore,
+    // so the only cost of reading early is that a style changed on the USB
+    // drive shows from the boot after next.
+    if (flashOk && configMgr.loadConfig(ctx.config) && dispOk) {
+        display.setBrightness(ctx.config.screenBrightness);
+    }
 
     Serial.begin(115200);
     if (digitalRead(PIN_BTN_FIRE) == LOW) { // hold FIRE for serial debug
@@ -429,6 +504,14 @@ void setup() {
     Serial.println(F("Merged single-MCU firmware"));
     Serial.print(F("Firmware "));
     Serial.println(FIRMWARE_VERSION); // same string the splash shows
+    Serial.print(F("BOOTHOLD: "));
+    if (bootHoldResult == BootHold::HELD) {
+        Serial.print(F("held, INT low after "));
+        Serial.print(bootHoldIntMs);
+        Serial.println(F(" ms"));
+    } else {
+        Serial.println(bootHoldResult == BootHold::NO_INT ? F("INT never low - gate skipped") : F("skipped (USB or reset)"));
+    }
     Serial.println();
 
     initPins();
@@ -467,6 +550,24 @@ void setup() {
         Serial.println(battery.isHibernating() ? F("yes") : F("no"));
     }
     Serial.println();
+
+    // ── Splash, then straight to the reading screen ──────────────────
+    // The splash plays (blocking, so it runs smoothly at the panel's full
+    // frame rate) after the sensors and battery gauge are up, then hands
+    // straight over to the main screen showing empty readings while storage
+    // (~0.8 s) and BLE (~0.5 s) finish starting — so the end of the animation
+    // never freezes. Live readings start once setup() returns. Boot warning
+    // screens below still draw over it; the switch further down redraws the
+    // main screen with the loaded settings either way.
+    {
+        const char *nameSuffix = strchr(ctx.config.bleName, '_');
+        display.playSplash(ctx.config.splashStyle, nameSuffix ? nameSuffix + 1 : nullptr);
+    }
+    if (dispOk) {
+        display.updateBattery(lastBatPct);
+        display.updateMeasureFrom(ctx.config.measureFromFront);
+        display.initScreen();
+    }
 
     // Flash/config BEFORE BLE — the advertised name comes from config.json
     initFlash();
@@ -511,39 +612,8 @@ void setup() {
     initCalibration();
     initDisco();
 
-    // ── Splash sequence: off(200) → on(300) → off(200) → on(750) = 1450ms
-    // Timed from its own start, NOT from the early static splash: init work
-    // and any boot warning screens (NOT CALIBRATED / FLASH RECOVERED /
-    // STORAGE DEGRADED, up to several seconds) used to consume the shared
-    // window, silently skipping the whole animation — and the BLE name,
-    // which is only drawn here.
-    {
-        uint32_t animStart = millis();
-        auto splashLaser = [&]() -> bool {
-            uint32_t t = millis() - animStart;
-            if (t < 200) {
-                return false; // off  200ms
-            }
-            if (t < 500) {
-                return true; // on   300ms
-            }
-            if (t < 700) {
-                return false; // off  200ms
-            }
-            return true; // on   750ms (final hold)
-        };
-        // Extract suffix after '_' from BLE name for splash display
-        const char *nameSuffix = strchr(ctx.config.bleName, '_');
-        if (nameSuffix) {
-            nameSuffix++; // skip the '_'
-        }
-
-        while (millis() - animStart < 1450) {
-            display.showSplash(splashLaser(), nameSuffix);
-        }
-    }
-
-    // ── Switch display from splash to main screen ────────────────
+    // ── Redraw the main screen with the settings initFlash() loaded ──
+    // (and to replace any boot warning screen shown above)
     if (dispOk) {
         display.updateBattery(lastBatPct);
         display.updateMeasureFrom(ctx.config.measureFromFront);
@@ -708,11 +778,34 @@ static void pollButtonIdentify() {
 // ── Main Loop ─────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 void loop() {
+
     uint32_t now = millis();
 
-    // Hardware power button (LTC2954 INT) — works in all modes
-    // (normal, menu, cal, snake). Confirmed press → clean shutdown.
-    pollPowerButton(now);
+    // ── Standby: only the power button, BLE delivery and the timeout run ──
+    if (standbyActive) {
+        serviceStandby(now);
+        delay(Timing::LOOP_INTERVAL_MS);
+        return;
+    }
+
+    // Hardware power button (LTC2954 INT), all modes: hold to power off,
+    // a shorter press goes to standby (see beginPowerHold). The rest of the
+    // loop pauses while the button is down so nothing redraws over the bar.
+    if (pwrHolding) {
+        servicePowerHold(now);
+        delay(Timing::LOOP_INTERVAL_MS);
+        return;
+    }
+    if (standbyNotice) {
+        serviceStandbyNotice(now);
+        delay(Timing::LOOP_INTERVAL_MS);
+        return;
+    }
+    if (powerButtonPressed(now)) {
+        beginPowerHold(now, false);
+        delay(Timing::LOOP_INTERVAL_MS);
+        return;
+    }
 
     buttons.update();
 
@@ -965,7 +1058,9 @@ void loop() {
 
     // ── Normal operation: cooperative polling ─────────────────────
     readSensorsUpdate(now);
-    pollButtons(now);
+    if (!swallowWakeButtons()) {
+        pollButtons(now);
+    }
     pollMeasurement(now);
     pollBLEPin(now);
     pollBLECommands(now);
@@ -2013,27 +2108,347 @@ static void pollBLECommands(uint32_t now) {
 // ── Hardware power button (LTC2954 INT, edge-triggered) ─────────────
 // (Replaces both V1's SHUTDOWN GPIO button and the DiscoX UART name-sync
 // handshake — the BLE name is now set locally at boot in initBle().)
-static void pollPowerButton(uint32_t now) {
+// True once per confirmed press. Disarms until INT is released, so the
+// press that enters standby can't also wake it (and, at boot, the power-on
+// press can't power us straight back off).
+static bool powerButtonPressed(uint32_t now) {
     bool pressed = power.buttonPressed(); // INT reads LOW
 
-    // Boot-hold guard: don't arm until the power-on press has released
     if (!pwrBtnArmed) {
         if (!pressed) {
             pwrBtnArmed = true;
         }
-        return;
+        return false;
     }
 
     if (!pressed) {
         pwrBtnLowSince = 0;
-        return;
+        return false;
     }
 
     if (pwrBtnLowSince == 0) {
         pwrBtnLowSince = now;                // LOW edge — start confirm window
     } else if (now - pwrBtnLowSince >= 20) { // 20 ms confirm (INT pulses <1 s)
+        pwrBtnArmed = false;
+        pwrBtnLowSince = 0;
+        return true;
+    }
+    return false;
+}
+
+// Modal screens (storage repair, USB drive): a press always powers off.
+static void pollPowerButton(uint32_t now) {
+    if (powerButtonPressed(now)) {
         Serial.println(F("SHUTDOWN: power button pressed"));
         doShutdown();
+    }
+}
+
+// Layer 2 (see standbyActive): fires only if the loop failed to power off
+// by itself. Runs in the FreeRTOS timer task.
+static TimerHandle_t standbyBackstop = nullptr;
+static constexpr uint32_t STANDBY_BACKSTOP_GRACE_S = 60;
+
+static void standbyBackstopFired(TimerHandle_t) {
+    if (standbyActive) {
+        killPowerNow();
+    }
+}
+
+static void armStandbyBackstop(uint32_t seconds) {
+    if (!standbyBackstop) {
+        standbyBackstop = xTimerCreate("stby", 1, pdFALSE, nullptr, standbyBackstopFired);
+    }
+    if (standbyBackstop) {
+        // Ticks computed directly: pdMS_TO_TICKS would overflow 32 bits at
+        // the 24 h config cap
+        xTimerChangePeriod(standbyBackstop, (TickType_t)(seconds * configTICK_RATE_HZ), 0); // also starts it
+    }
+}
+
+static void enterStandby(uint32_t now) {
+    Serial.println(F("STANDBY: power button pressed"));
+    if (menuMgr.isActive()) {
+        menuMgr.close(); // wake lands on the reading screen
+    }
+    if (ctx.currentState == SystemState::TAKING_MEASUREMENT) {
+        ctx.quickShot = false;
+        ctx.currentState = SystemState::IDLE;
+    }
+    laserOff();
+    disco.turnOff();
+    Sounds::stopMelody();
+    ctx.discoOn = false;
+    // Everything doShutdown() would save, saved now: the standby may end in
+    // a hard kill (long hold, flat battery) rather than the timeout's
+    // clean power-off.
+    if (flashOk && configMgr.hasPendingToSync()) {
+        configMgr.syncPendingToFlash();
+    }
+    flash_nrf5x_flush();
+    if (dispOk) {
+        display.setSleep(true);
+    }
+    standbySince = now;
+    standbyActive = true;
+    armStandbyBackstop(ctx.config.standbyTimeout + STANDBY_BACKSTOP_GRACE_S);
+}
+
+static void drainButtonEdges() {
+    for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+        buttons.wasPressed(static_cast<Button>(i));
+        buttons.wasReleased(static_cast<Button>(i));
+    }
+}
+
+static bool anyButtonHeld() {
+    for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+        if (buttons.isPressed(static_cast<Button>(i))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The button that woke the device must not also act (FIRE taking a shot,
+// UP held long enough toggling disco): normal button handling stays off
+// until every button is released.
+static bool wakeButtonsHeld = false;
+
+static bool swallowWakeButtons() {
+    if (!wakeButtonsHeld) {
+        return false;
+    }
+    drainButtonEdges();
+    if (!anyButtonHeld()) {
+        wakeButtonsHeld = false;
+    }
+    return true;
+}
+
+static void wakeFromStandby(const __FlashStringHelper *why) {
+    Serial.print(F("STANDBY: waking ("));
+    Serial.print(why);
+    Serial.println(')');
+    standbyActive = false;
+    if (standbyBackstop) {
+        xTimerStop(standbyBackstop, 0);
+    }
+    if (dispOk) {
+        display.initScreen(); // redraw before the panel comes back on
+        display.setSleep(false);
+    }
+    ctx.lastActivityTime = millis();
+}
+
+static void serviceStandby(uint32_t now) {
+    // Power button: wake, and start the hold bar in case they're holding to
+    // power off. A release before it fills leaves the device awake.
+    if (powerButtonPressed(now)) {
+        wakeFromStandby(F("power button"));
+        beginPowerHold(now, true);
+        return;
+    }
+    // Any of the four buttons also wakes
+    buttons.update();
+    if (anyButtonHeld()) {
+        wakeFromStandby(F("button"));
+        wakeButtonsHeld = true;
+        drainButtonEdges();
+        return;
+    }
+    if (now - standbySince >= ctx.config.standbyTimeout * 1000UL) {
+        Serial.println(F("Standby timeout — powering off"));
+        doShutdown();
+    }
+    // Keep the BLE link up; phone commands are dropped — the device is "off"
+    // as far as they go. Reading delivery (pollBLEDrain) deliberately
+    // pauses: it writes to flash, and flash is the one known way this
+    // firmware hangs. A leg already in flight still gets its ACK, and the
+    // drain commits it on wake.
+    pumpBleInMode();
+
+    // Bench tests for the safety net (standby only). Unplug USB right after
+    // sending: USB power can keep the board alive past KILL.
+    //   H — hang the loop task; the backstop should cut power in 20 s
+    //   X — hard fault after 10 s; the fault handler should cut power at once
+    if (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == 'H') {
+            Serial.println(F("TEST: loop hung - backstop powers off in 20 s"));
+            Serial.flush();
+            armStandbyBackstop(20);
+            while (true) {
+            }
+        } else if (c == 'X') {
+            Serial.println(F("TEST: hard fault in 10 s - unplug USB now"));
+            Serial.flush();
+            delay(10000);
+            __builtin_trap();
+        }
+    }
+}
+
+// ── Power button: hold to power off ─────────────────────────────────
+// A press shows a bar that fills over POWER_HOLD_OFF_MS. Held to the end:
+// clean power-off. Released sooner: standby (or, if standby is disabled or
+// the press woke the device from standby, carry on as before).
+//
+// Storage is made safe the moment the press is confirmed, before the bar:
+// the LTC2954 cuts power by itself if the button is held long enough, and
+// its threshold is set by a capacitor on the board, so the bar may never
+// get to finish. Either way nothing unsaved is lost. Calibration and snake
+// get no bar (it would wipe their screen) — just hold to power off.
+static bool pwrHoldFromStandby = false;
+static bool pwrHoldShowBar = false;
+static uint32_t pwrHoldStart = 0;
+static uint32_t pwrHoldLastDraw = 0;
+
+static void showHoldBar(float progress) {
+    static const char *const kLines[] = {"Hold to", "power off"};
+    display.showPowerPrompt(kLines, 2, progress);
+}
+
+static void beginPowerHold(uint32_t now, bool fromStandby) {
+    Serial.println(F("POWER: button down - hold to power off"));
+    pwrHolding = true;
+    pwrHoldFromStandby = fromStandby;
+    pwrHoldStart = now;
+    pwrHoldShowBar = dispOk && !calMode.isActive() && !snakeGame.isActive();
+    if (flashOk && configMgr.hasPendingToSync()) {
+        configMgr.syncPendingToFlash();
+    }
+    flash_nrf5x_flush();
+    pwrHoldLastDraw = 0; // bar is drawn by servicePowerHold after POWER_BAR_DELAY_MS
+}
+
+static void servicePowerHold(uint32_t now) {
+    const uint32_t held = now - pwrHoldStart;
+    if (power.buttonPressed()) {
+        if (held >= Timing::POWER_HOLD_OFF_MS) {
+            Serial.println(F("SHUTDOWN: power button held"));
+            if (pwrHoldShowBar) {
+                static const char *const kLines[] = {"Powering", "off"};
+                display.showPowerPrompt(kLines, 2, 1.0f);
+            }
+            doShutdown();
+        }
+        // Not on a quick tap: the bar only appears once it's clearly a hold
+        if (pwrHoldShowBar && held >= Timing::POWER_BAR_DELAY_MS &&
+            (pwrHoldLastDraw == 0 || now - pwrHoldLastDraw >= 40)) {
+            showHoldBar((float)held / Timing::POWER_HOLD_OFF_MS);
+            pwrHoldLastDraw = now;
+        }
+        return;
+    }
+
+    // Released before the bar filled. The duration is logged because it
+    // also shows how the LTC2954's INT behaves while the button is held.
+    Serial.print(F("POWER: released after "));
+    Serial.print(held);
+    Serial.println(F(" ms"));
+    pwrHolding = false;
+    drainButtonEdges();
+    if (pwrHoldFromStandby || ctx.config.standbyTimeout == 0 || calMode.isActive() || snakeGame.isActive()) {
+        if (pwrHoldShowBar && pwrHoldLastDraw != 0) {
+            if (menuMgr.isActive()) {
+                menuMgr.close(); // the bar covered it — land on the reading screen
+            }
+            display.initScreen();
+        }
+        ctx.lastActivityTime = millis();
+        return;
+    }
+    if (!dispOk) {
+        enterStandby(now);
+        return;
+    }
+    // Say what's happening before the screen goes dark
+    static const char *const kLines[] = {"Standby", "mode"};
+    display.showPowerPrompt(kLines, 2, -1.0f, "Hold to shut down");
+    standbyNotice = true;
+    standbySince = now; // notice start; enterStandby() resets it
+}
+
+// The second between the press and standby. Power button again: start the
+// hold (so "hold to shut down" works from here). Any other button: stay
+// awake.
+static void serviceStandbyNotice(uint32_t now) {
+    if (powerButtonPressed(now)) {
+        standbyNotice = false;
+        beginPowerHold(now, false);
+        return;
+    }
+    buttons.update();
+    if (anyButtonHeld()) {
+        Serial.println(F("STANDBY: cancelled by button"));
+        standbyNotice = false;
+        if (menuMgr.isActive()) {
+            menuMgr.close();
+        }
+        display.initScreen();
+        wakeButtonsHeld = true;
+        drainButtonEdges();
+        ctx.lastActivityTime = millis();
+        return;
+    }
+    if (now - standbySince >= Timing::STANDBY_NOTICE_MS) {
+        standbyNotice = false;
+        enterStandby(now);
+    }
+}
+
+// ── Cold power-on: hold, don't tap ──────────────────────────────────
+// The LTC2954 powers the board after a short press, so on a cold start the
+// user must keep holding for POWER_HOLD_ON_MS more, with a bar; let go
+// sooner and a notice explains, then the device switches itself back off
+// (before touching storage). Skipped when USB power is present (charging,
+// flashing, and the reboots after an update or USB drive mode) and after
+// any reset that isn't a power-on.
+//
+// Fail-safe: if INT is never seen LOW at boot, the gate can't tell a tap
+// from a hold — maybe INT doesn't reflect the power-on press at all — so it
+// boots normally rather than risk a device that never turns on. The
+// outcome is printed once Serial is up ("BOOTHOLD: ...").
+
+static void bootHoldGate() {
+    const bool usb = NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk;
+    const uint32_t notPowerOn = POWER_RESETREAS_SREQ_Msk | POWER_RESETREAS_DOG_Msk |
+                                POWER_RESETREAS_LOCKUP_Msk | POWER_RESETREAS_RESETPIN_Msk;
+    if (!dispOk || usb || (NRF_POWER->RESETREAS & notPowerOn)) {
+        bootHoldResult = BootHold::SKIPPED;
+        return;
+    }
+
+    const uint32_t t0 = millis();
+    while (!power.buttonPressed()) {
+        if (millis() - t0 > 30) {
+            bootHoldResult = BootHold::NO_INT; // can't tell — boot normally
+            return;
+        }
+    }
+    bootHoldIntMs = millis() - t0;
+
+    static const char *const kHold[] = {"Hold to", "power on"};
+    uint32_t lastDraw = 0;
+    for (;;) {
+        uint32_t held = millis() - t0;
+        if (held >= Timing::POWER_HOLD_ON_MS) {
+            display.showPowerPrompt(kHold, 2, 1.0f);
+            bootHoldResult = BootHold::HELD;
+            return;
+        }
+        if (!power.buttonPressed()) {
+            static const char *const kTap[] = {"Hold the", "power", "button to", "turn on"};
+            display.showPowerPrompt(kTap, 4);
+            delay(Timing::POWER_TAP_NOTICE_MS);
+            display.blankScreen();
+            power.powerOff(); // nothing touched storage yet
+        }
+        if (lastDraw == 0 || millis() - lastDraw >= 40) {
+            display.showPowerPrompt(kHold, 2, (float)held / Timing::POWER_HOLD_ON_MS);
+            lastDraw = millis();
+        }
     }
 }
 

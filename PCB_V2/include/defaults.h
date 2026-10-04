@@ -37,6 +37,7 @@ constexpr float calEmaAlpha = 0.3f;             // EMA pre-filter (lower = smoot
 constexpr uint16_t calTimeoutMs = 4000;         // ms max wait for stability before forcing acceptance
 constexpr uint32_t autoShutdownTimeout = 1800;  // seconds (30 min)
 constexpr uint32_t laserTimeout = 120;          // seconds (2 min)
+constexpr uint32_t standbyTimeout = 600;        // seconds a power-button "off" stays in standby; 0 = off at once
 constexpr bool laserWibble = true;              // blink laser on leg detect
 // Laser shot validation (dark/specular targets return plausible-but-wrong
 // distances — see discox-sq-rejection-brief.md). A measurement is N low-speed
@@ -61,6 +62,7 @@ constexpr bool measureFromFront = false;        // false = Back (add offset), tr
 // whatever is in it; `splays_enabled` stays editable via USB drive mode.
 constexpr bool splaysEnabled = true;
 constexpr uint8_t screenBrightness = 255;       // OLED contrast 0-255
+constexpr uint8_t splashStyle = 2;              // boot animation, Splash::Style (2 = Mirror Ball); config.json only
 constexpr char bleName[] = "SAP6_DiscoX";
 constexpr uint8_t bleNameMaxLen = 20; // max chars for BLE name
 } // namespace Defaults
@@ -77,6 +79,12 @@ constexpr uint32_t AUTO_SHUTOFF_CHECK_MS = 5000;
 constexpr uint32_t LASER_TIMEOUT_CHECK_MS = 1000;
 constexpr uint32_t DISPLAY_REFRESH_MS = 250; // 4 Hz display updates
 constexpr uint32_t LOOP_INTERVAL_MS = 10;    // main loop pace
+// Power button (see "Power button and standby" in CLAUDE.md)
+constexpr uint32_t POWER_HOLD_OFF_MS = 1500; // hold this long (bar) to power off
+constexpr uint32_t POWER_BAR_DELAY_MS = 250;  // bar appears only once a press is clearly a hold
+constexpr uint32_t STANDBY_NOTICE_MS = 1000;  // "Standby mode" shown before the screen goes off
+constexpr uint32_t POWER_HOLD_ON_MS = 1000;  // cold boot: keep holding this long after the MCU starts
+constexpr uint32_t POWER_TAP_NOTICE_MS = 2000; // "hold the button" notice before switching back off
 constexpr float BATTERY_SHUTDOWN_PCT = 5.0f;
 constexpr uint32_t CALIB_HOLD_MS = 1000;    // 1s hold for menu
 constexpr uint32_t DISCO_HOLD_MS = 1500;    // 2s hold for disco toggle
