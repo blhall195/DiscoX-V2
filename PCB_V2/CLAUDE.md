@@ -362,7 +362,11 @@ frozen.
   for threshold calibration. Limit lowered 50 → 30 on 2026-09-29 (details
   in defaults.h): 50 rejected tape-verified shots, while SQ ≤15 gave readings
   that agreed with each other but were wrong (half the true distance), so
-  don't add a "low SQ but shots agree" acceptance band. Background: `discox-sq-rejection-brief.md`
+  don't add a "low SQ but shots agree" acceptance band. Lowered again
+  30 → 20 on 2026-10-09 with `laser_shots` 1 → 3 (all three must clear the
+  gate and agree within 25 mm) to cope with dark rock; SQ 20-29 is not yet
+  tape-verified, and the agreement check does not guard against the ≤15
+  failure, so keep the floor above 15. Background: `discox-sq-rejection-brief.md`
   (note that brief repeats the manual's inverted claim).
 
 - **config.json holds user settings only** (2026-09-26). Eleven keys: `ble_name`,

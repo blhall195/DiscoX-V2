@@ -46,12 +46,19 @@ constexpr bool laserWibble = true;              // blink laser on leg detect
 // 2026-09-06 disproved it) is at least laserSqLimit. Median of survivors is
 // returned only if enough survive and they agree within laserSpreadLimitMm.
 constexpr uint8_t laserShotsMax = 5;  // buffer size / settings clamp
-constexpr uint8_t laserShots = 1;     // default: single shot, SQ-gated — fast
+// 3 shots: all three must clear laserSqLimit and agree within
+// laserSpreadLimitMm, or the reading is refused. Costs up to two extra
+// low-speed shots per reading (2026-10-09; was 1).
+constexpr uint8_t laserShots = 3;
 // laserSqLimit tuned 2026-09-29 against a tape measure: SQ 30-49 read within
 // ~2 cm at 0.6/0.9/1.1 m (50 rejected them as WEAK); SQ <=15 was wrong, and
 // can be wrong consistently — three shots at SQ 10-15 on a dark target at
 // 1.9 m all read ~1.0 m, so repeat-and-agree doesn't rescue low SQ.
-constexpr uint16_t laserSqLimit = 30;     // reject shots with SQ BELOW this; 0 = gate disabled
+// Lowered 30 -> 20 on 2026-10-09 (with laserShots 1 -> 3) because dark rock
+// was failing too often. SQ 16-29 had not been checked against a tape when
+// this went in — the agreement check alone would not catch the SQ <=15
+// failure above, so verify SQ 20-29 shots on dark rock before trusting it.
+constexpr uint16_t laserSqLimit = 20;     // reject shots with SQ BELOW this; 0 = gate disabled
 constexpr uint16_t laserSpreadLimitMm = 25;
 constexpr uint32_t laserMinDistanceMm = 30;     // module rated minimum
 constexpr uint32_t laserMaxDistanceMm = 100000; // rated max at reflectivity 1.0
