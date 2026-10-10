@@ -45,8 +45,10 @@ list of commit titles. The script **detects that and refuses to publish it** —
 you get the download links updated and an explicit warning on the PR that the
 changelog was left alone, rather than commit messages appearing on the website.
 
-Write the notes on the release before the workflow's "Read the release notes"
-step runs, or edit the release afterwards and re-run the job.
+Either commit the notes as `release-notes/<tag>.md` before pushing the tag
+(the workflow publishes them as the release body, with no generated commit
+list), or write them on the release in GitHub before the workflow's "Read the
+release notes" step runs, or edit the release afterwards and re-run the job.
 
 The cross-repo PR needs the `WEBSITE_PR_TOKEN` secret (a fine-grained PAT scoped
 to the website repo only, Contents + Pull requests write). Without it the
