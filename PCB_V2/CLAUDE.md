@@ -252,6 +252,21 @@ What the calibration now does:
   only sees rotation about the laser axis; it missed both the axis-mapping
   bug and the radiator. Clean outdoor value ≈ 0.1°; the final calibration
   held dip to 67.2° ± 0.12° over all 80 points.
+- **No RBF step in Part 2** (2026-11-14). Part 2 used to fit a 10-parameter
+  non-linear magnetometer correction (`fitNonLinearQuick`) from its 24
+  shots. An offline numpy replay of the 2026-09-26 logs (matching the
+  device's logged figures to 4 decimals) showed it fitted noise: in-sample
+  accuracy 0.25° → 0.21°, but no gain on a held-out set of 8 (0.269° vs
+  0.267°), and on Part 1's 56 points it doubled the field error (0.07% →
+  0.15%), widened dip spread (0.105° → 0.141°) and moved headings by up to
+  0.5°. Part 2 is now plane fits + roll alignment only, and clears any RBFs
+  in the stored calibration before aligning. `Sensor::apply` still honours
+  RBFs in a calibration saved by older firmware, so those devices are
+  unchanged until Part 2 is rerun. Expect the Part 2 accuracy figure to read
+  slightly higher than before (it was flattered by the in-sample fit). The
+  same replay found nothing to gain from a geometric ellipsoid refinement
+  (0.001°), and that a joint Part 1 + Part 2 alignment only helps when the
+  three targets are bunched in azimuth. Not yet run on hardware.
 - **Timeout** no longer records an unsettled point: it plays the failed-shot
   sound (`Sounds::error()`) and the user presses FIRE again.
 - **F/B check is read-only** (2026-09-27). It used to fit a sinusoidal

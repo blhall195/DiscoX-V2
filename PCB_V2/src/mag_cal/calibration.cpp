@@ -233,32 +233,6 @@ float Calibration::fitToAxis(const PairedData &pairedData, char axis) {
     return accuracy(pairedData);
 }
 
-float Calibration::fitNonLinearQuick(const PairedData &pairedData, int paramCount) {
-    // Port of Python calibration.py fit_non_linear_quick()
-    mag_.setLinear();
-    grav_.setLinear();
-
-    std::vector<Eigen::Vector3f> expectedMags, rawMags;
-    for (const auto &pair : pairedData) {
-        std::vector<Eigen::Vector3f> exp, raw;
-        getRawAndExpectedMagData(pair.first, pair.second, exp, raw);
-        expectedMags.insert(expectedMags.end(), exp.begin(), exp.end());
-        rawMags.insert(rawMags.end(), raw.begin(), raw.end());
-    }
-
-    std::vector<float> params = getLstsqNonLinearParams(paramCount, expectedMags, rawMags);
-
-    // Build full param array: X params, Y zeros (rotation axis), Z params
-    std::vector<float> allParams(paramCount * 3, 0.0f);
-    for (int i = 0; i < paramCount; i++) {
-        allParams[i] = params[i];                               // X axis
-        allParams[2 * paramCount + i] = params[paramCount + i]; // Z axis
-    }
-    mag_.setNonLinearParams(allParams.data(), paramCount * 3);
-
-    return accuracy(pairedData);
-}
-
 float Calibration::accuracy(const PairedData &pairedData) const {
     // Port of Python calibration.py accuracy()
     // Session 17: double-precision accumulators
@@ -404,102 +378,6 @@ bool Calibration::isARun(const std::vector<float> &azimuths, const std::vector<f
     maxAz = *std::max_element(az.begin(), az.end());
     float minAz = *std::min_element(az.begin(), az.end());
     return (maxAz - minAz) <= precision;
-}
-
-void Calibration::getRawAndExpectedMagData(const std::vector<Eigen::Vector3f> &magSet,
-                                           const std::vector<Eigen::Vector3f> &gravSet,
-                                           std::vector<Eigen::Vector3f> &expected,
-                                           std::vector<Eigen::Vector3f> &raw) const {
-    // Port of Python calibration.py _get_raw_and_expected_mag_data()
-    // Session 17: double-precision rotation/averaging for numerical stability
-    int N = (int)magSet.size();
-    std::vector<Eigen::Vector3d> rotatedMags(N);
-    std::vector<Eigen::Matrix3d> rotMats(N);
-    std::vector<Eigen::Vector3d> rawD(N);
-    raw.resize(N);
-
-    for (int i = 0; i < N; i++) {
-        Angles angles = getAngles(magSet[i], gravSet[i]);
-        double rollRad = (double)angles.roll * DEG2RAD_D;
-        double c = cos(rollRad), s = sin(rollRad);
-
-        Eigen::Matrix3d rotMat;
-        rotMat << c, 0, s, 0, 1, 0, -s, 0, c;
-        rotMats[i] = rotMat;
-
-        Eigen::Vector3f rawMag = mag_.apply(magSet[i]);
-        raw[i] = rawMag;
-        rawD[i] = rawMag.cast<double>();
-
-        // Python: rotated_mag = np.dot(raw_mag.reshape((1,3)), rot_mat.transpose())
-        // numpy row @ M^T  →  Eigen: (M^T)^T * col = M * col
-        rotatedMags[i] = rotMat * rawD[i];
-    }
-
-    // Average of rotated vectors
-    Eigen::Vector3d avgVec = Eigen::Vector3d::Zero();
-    for (int i = 0; i < N; i++) {
-        avgVec += rotatedMags[i];
-    }
-    avgVec /= (double)N;
-
-    // Rotate average back for each measurement
-    expected.resize(N);
-    for (int i = 0; i < N; i++) {
-        // Python: expected = np.dot(average_vector.reshape((1,3)), rot_mat)
-        // numpy row @ M  →  Eigen: M^T * col
-        Eigen::Vector3d expD = rotMats[i].transpose() * avgVec;
-        expected[i] = expD.cast<float>();
-    }
-}
-
-std::vector<float> Calibration::getLstsqNonLinearParams(int paramCount,
-                                                        const std::vector<Eigen::Vector3f> &expectedMags,
-                                                        const std::vector<Eigen::Vector3f> &rawMags) const {
-    // Port of Python calibration.py _get_lstsq_non_linear_params()
-    // Session 17: double-precision least-squares solve
-    int N = (int)expectedMags.size();
-    int cols = paramCount * 2; // X and Z axes only
-
-    // Build least-squares matrices in double precision
-    Eigen::MatrixXd inputData(N * 2, cols);
-    Eigen::VectorXd outputData(N * 2);
-    inputData.setZero();
-
-    // Create a dummy RBF to get Gaussian basis functions
-    std::vector<float> zeroParams(paramCount, 0.0f);
-    RBF dummyRbf;
-    dummyRbf.init(zeroParams.data(), paramCount);
-
-    double gaussBuf[RBF::MAX_PARAMS];
-
-    for (int i = 0; i < N; i++) {
-        Eigen::Vector3d diff = expectedMags[i].cast<double>() - rawMags[i].cast<double>();
-
-        // Get Gaussian basis for each axis of raw reading (double overload)
-        dummyRbf.getGaussians((double)rawMags[i][0], gaussBuf);
-        for (int j = 0; j < paramCount; j++) {
-            inputData(i * 2, j) = gaussBuf[j]; // X axis → first paramCount cols
-        }
-
-        dummyRbf.getGaussians((double)rawMags[i][2], gaussBuf);
-        for (int j = 0; j < paramCount; j++) {
-            inputData(i * 2 + 1, paramCount + j) = gaussBuf[j]; // Z axis → last paramCount cols
-        }
-
-        outputData[i * 2] = diff[0];     // X component
-        outputData[i * 2 + 1] = diff[2]; // Z component
-    }
-
-    // Solve least squares in double
-    Eigen::VectorXd params = inputData.colPivHouseholderQr().solve(outputData);
-
-    // Cast results back to float for RBF storage
-    std::vector<float> result(cols);
-    for (int i = 0; i < cols; i++) {
-        result[i] = (float)params[i];
-    }
-    return result;
 }
 
 // ── Roll alignment (port of calibrate_roll.py) ──────────────────────

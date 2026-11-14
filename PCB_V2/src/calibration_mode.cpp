@@ -1135,7 +1135,11 @@ void CalibrationMode::calculateAlignment() {
     Serial.println(F("Running alignment fit..."));
     uint32_t t0 = millis();
 
-    // Alignment refines existing calibration — cal_ should already be loaded
+    // Alignment refines existing calibration — cal_ should already be loaded.
+    // A calibration stored by older firmware may carry RBF corrections; they
+    // are no longer fitted, so drop them before aligning.
+    cal_->mag().setLinear();
+    cal_->grav().setLinear();
 
     // Find similar shots (runs of aligned readings)
     auto runs = cal_->findSimilarShots(magArray_, gravArray_);
@@ -1163,13 +1167,12 @@ void CalibrationMode::calculateAlignment() {
     Serial.print(accAfterAxis, 3);
     Serial.println(F(" deg"));
 
-    // Step 2: Non-linear quick (5 params, magnetometer only)
-    float accAfterNL = cal_->fitNonLinearQuick(pairedData, 5);
-    Serial.print(F("  After non-linear: "));
-    Serial.print(accAfterNL, 3);
-    Serial.println(F(" deg"));
+    // (A non-linear RBF correction of the magnetometer was fitted here until
+    // 2026-11-14. Replaying the 2026-09-26 logs showed it only fitted noise:
+    // no gain on a held-out set of 8, and on Part 1's 56 points it doubled
+    // the field error and moved headings by up to 0.5 deg.)
 
-    // Step 3: Roll alignment
+    // Step 2: Roll alignment
     cal_->alignSensorRoll(magArray_, gravArray_);
 
     // Final accuracy

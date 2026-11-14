@@ -84,10 +84,6 @@ class Calibration {
     /// Returns accuracy (degrees) after alignment.
     float fitToAxis(const PairedData &pairedData, char axis = 'Y');
 
-    /// Fast non-linear RBF correction using least-squares (magnetometer only).
-    /// Returns accuracy (degrees).
-    float fitNonLinearQuick(const PairedData &pairedData, int paramCount = 3);
-
     /// Measure calibration accuracy: avg std dev of orientation in degrees.
     float accuracy(const PairedData &pairedData) const;
 
@@ -154,17 +150,6 @@ class Calibration {
     /// Check if a sequence of azimuths/inclinations forms a run
     static bool isARun(const std::vector<float> &azimuths, const std::vector<float> &inclinations,
                        float precision);
-
-    /// Get raw and expected mag data for non-linear quick fitting
-    void getRawAndExpectedMagData(const std::vector<Eigen::Vector3f> &mag,
-                                  const std::vector<Eigen::Vector3f> &grav,
-                                  std::vector<Eigen::Vector3f> &expected,
-                                  std::vector<Eigen::Vector3f> &raw) const;
-
-    /// Solve for non-linear RBF params using least-squares
-    std::vector<float> getLstsqNonLinearParams(int paramCount,
-                                               const std::vector<Eigen::Vector3f> &expectedMags,
-                                               const std::vector<Eigen::Vector3f> &rawMags) const;
 };
 
 } // namespace MagCal

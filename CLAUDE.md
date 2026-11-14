@@ -95,7 +95,9 @@ Same math in V1 and V2. Ported from Python; uses Eigen for linear algebra.
 
 - **Ellipsoid fitting**: 56 points → hard-iron centre + soft-iron 3x3 transform
 - **Alignment**: 24 points at 3 orientations → rotates transform to gravity reference
-- **RBF non-linear correction**: Gaussian radial basis functions per magnetometer axis
+- **RBF non-linear correction**: no longer fitted (removed 2026-11-14, see
+  `PCB_V2/CLAUDE.md`). The runtime still applies RBFs found in a calibration
+  stored by older firmware, until Part 2 is next run.
 - **Anomaly detection**: field strength ±2%, dip angle ±3° triggers warnings
 - **F/B check** (Menu → Calibration → F/B Check): read-only. The user shoots legs
   forward and back; each pair's azimuth disagreement (off 180°) and inclination sum are shown,
