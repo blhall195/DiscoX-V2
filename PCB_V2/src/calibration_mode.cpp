@@ -167,9 +167,11 @@ bool CalibrationMode::update() {
 // ── State: INTRO (ellipsoid or alignment) ───────────────────────────
 
 void CalibrationMode::updateIntro() {
-    // Dismiss intro screen on any button press
-    if (btns_->wasPressed(Button::FIRE) || btns_->wasPressed(Button::UP_DISCO) ||
-        btns_->wasPressed(Button::DOWN) || btns_->wasPressed(Button::MENU)) {
+    // Dismiss intro screen on any button press. Read all four (| not ||) so
+    // no press is left latched to fire in the stage that follows.
+    bool anyPressed = btns_->wasPressed(Button::FIRE) | btns_->wasPressed(Button::UP_DISCO) |
+                      btns_->wasPressed(Button::DOWN) | btns_->wasPressed(Button::MENU);
+    if (anyPressed) {
 
         if (state_ == CalibState::INTRO_ELLIPSOID) {
             // Start ellipsoid collection
@@ -471,6 +473,13 @@ void CalibrationMode::updateSaving() {
         resultMagAcc_ = 0.0f;
         resultGravAcc_ = 0.0f;
         resultAccuracy_ = 0.0f;
+        // Button presses stay latched until read, and the UP+DOWN hold that
+        // saved Part 1 (or any UP press while collecting) was never read: it
+        // dismissed these instructions the instant they appeared.
+        (void)btns_->wasPressed(Button::FIRE);
+        (void)btns_->wasPressed(Button::UP_DISCO);
+        (void)btns_->wasPressed(Button::DOWN);
+        (void)btns_->wasPressed(Button::MENU);
         state_ = CalibState::INTRO_ALIGNMENT;
         showAlignmentIntro();
         return;
