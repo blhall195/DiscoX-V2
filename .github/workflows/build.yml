@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest became 26.04 in Oct 2026, whose compiler makes
+    # test_fitEllipsoid_rejects_planar_data fail (v2.0.9 passed on 24.04).
+    runs-on: ubuntu-24.04
     permissions:
       contents: write  # needed to publish a release on tag pushes
     steps:
