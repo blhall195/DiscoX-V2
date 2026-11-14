@@ -16,7 +16,22 @@ constexpr bool anomalyDetection = false;
 // then showed 1.0 deg / 0.5 s still cost ~1 s after arriving on target, so
 // 1.5 deg / 0.3 s (~0.5 s, aim within ~0.3 deg). Only stabilityTolerance is
 // user-editable (config.json "steady_tolerance"); the rest are constants.
-constexpr float stabilityTolerance = 1.5f;    // degrees — max deviation of any reading from the window mean
+//
+// 2026-11-14: survey shots no longer wait for that steady window. The sensors
+// are sampled for the whole time the laser spends ranging and the reading is
+// the average of the hold (shot_capture.h), so stabilityTolerance is now only
+// a did-it-move check there: the furthest any 0.1 s of the hold may sit from
+// the average (the worst fifth of the hold is dropped first). Untuned.
+// The steady window survives in the F/B check, which has no laser ranging to
+// sample through: its limit starts at stabilityToleranceTight on the FIRE
+// press and relaxes to stabilityTolerance over stabilityRampMs
+// (SensorManager::rampedTolerance); nothing steady by stabilityTimeoutMs is a
+// failed shot.
+constexpr float stabilityTolerance = 1.5f;      // degrees — see above
+constexpr float stabilityToleranceTight = 0.5f; // degrees — F/B check: the limit at the moment of the press
+constexpr uint32_t stabilityRampMs = 1000;      // F/B check: tight -> loosest over this long
+constexpr uint32_t stabilityTimeoutMs = 4000;   // F/B check: no steady window by now = failed shot
+constexpr uint32_t shotCaptureMinMs = 600;      // shortest hold a survey shot is averaged over
 constexpr float quickShotStabilityTol = 8.0f; // degrees (wider for splay shots)
 constexpr uint8_t stabilityBufferLength = 3;   // x 100 ms steady window (clamped 2-10)
 constexpr float emaAlphaStable = 0.05f;         // stationary alpha — heavy, to hide hand tremor on

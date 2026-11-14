@@ -200,8 +200,10 @@ womp). Survey shots, calibration points and F/B-check shots all call it, so
 they look and sound the same. Calibration used to carry V1-era sequences of
 its own (a click for a taken point, the LED just going out on a failed one,
 three clicks for an F/B leg), which drifted once `sounds.cpp` arrived.
-Change feedback there, not at call sites. Calibration-only cues (undo, Part 2
-"change direction") stay as a plain `Sounds::click()`.
+Change feedback there, not at call sites. The end of each Part 2 set of 8
+uses `legComplete` (it was a lone click, drowned by the reading bleep, and
+users missed it); the screen rolls straight to "Set N of 3, 0/8" with an
+inverted "Aim at a NEW spot" banner. Undo stays a plain `Sounds::click()`.
 
 ## Calibration quality checks (2026-09-26)
 
@@ -611,6 +613,28 @@ frozen.
    on a steady hold, now ~1.5x/s, and it settles within 0.5° faster.
    Only `steady_tolerance` is user-editable; the rest are firmware
    constants, so a retune reaches devices on the next flash.
+   **Replaced 2026-11-14 (built, not yet run on hardware):** survey shots
+   and splays no longer wait for a steady window (it had since become
+   0.3 s / 1.5°, which accepted a device still swinging and still felt
+   fussy). FIRE starts the laser at once and the mag + accel are sampled
+   for the whole time it spends ranging, through an idle hook in the
+   LDJ100 wait loop (`shotSampleTick` in main.cpp, `LDJ100::setIdleHook`);
+   the reading is the average of that hold (`ShotCapture`,
+   include/shot_capture.h): raw vectors pooled in 100 ms bins, the worst
+   fifth of bins dropped (button jolt, twitches), angles computed once
+   from the averaged vectors, minimum hold 0.6 s. `steady_tolerance`
+   (default 1.5°, same key) is now only a did-it-move check: a kept bin
+   further than that from the average fails the shot (UNSTEADY screen +
+   womp, laser left on). Splays use 8°. The anomaly check runs on the
+   averaged vectors. Relies on the laser not disturbing the magnetometer
+   while ranging (calibration is done with the laser on). Serial per shot:
+   `MEAS: capture ms= bins=used/total spread= tol=`. The hook must stay
+   short and never touch the laser, display or storage. The trim fraction
+   and tolerance are untuned.
+   The F/B check has no laser ranging to sample through, so it keeps the
+   steady window, now with a ramped limit: 0.5° at the press relaxing to
+   `steady_tolerance` over 1 s (`SensorManager::rampedTolerance`), failed
+   shot after 4 s.
 4. BLE needs a phone run (SexyTopo / nRF Connect): 17-byte legs, ACK/seq
    bit, commands, Coded PHY on Android (iOS = 1 Mbps, normal). Since
    2026-09-14 this must also prove the delivery drain (see "Reading

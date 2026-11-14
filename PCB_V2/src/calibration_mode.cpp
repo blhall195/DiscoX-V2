@@ -551,32 +551,41 @@ void CalibrationMode::recordPoint(const Eigen::Vector3f &mag, const Eigen::Vecto
 void CalibrationMode::acceptPoint(const Eigen::Vector3f &mag, const Eigen::Vector3f &grav) {
     recordPoint(mag, grav);
 
-    Serial.print(F("Accepted point "));
-    Feedback::readingOk(*disco_); // as for a survey reading
-
     iteration_++;
     waitingForStable_ = false;
     bufferCount_ = 0;
     bufferIdx_ = 0;
 
-    // Update display
-    if (state_ == CalibState::COLLECTING_ELLIPSOID) {
-        showEllipsoidScreen();
-    } else {
-        showAlignmentProgress();
+    // Alignment set of 8 finished (not the last): time to aim somewhere new.
+    // A single click after the reading bleep was easy to miss, so the end of
+    // a set gets the leg-complete feedback instead — it means "this group is
+    // done" in survey use too. Purple stays lit until the next FIRE.
+    bool setDone = state_ == CalibState::COLLECTING_ALIGNMENT && iteration_ % 8 == 0 &&
+                   iteration_ < targetCount_;
 
-        // Single beep at direction changes (every 8 points)
-        if (iteration_ % 8 == 0 && iteration_ < targetCount_) {
-            beep();
-            Serial.println(F("Change direction..."));
-        }
-    }
-
+    Serial.print(F("Accepted point "));
     Serial.print(iteration_);
     Serial.print(F("/"));
     Serial.println(targetCount_);
 
-    disco_->turnOff(); // green ends with the reading, as in survey use
+    // Update display first, so the new-direction prompt is up during the fanfare
+    if (state_ == CalibState::COLLECTING_ELLIPSOID) {
+        showEllipsoidScreen();
+    } else {
+        showAlignmentProgress();
+    }
+
+    if (setDone) {
+        Serial.println(F("Set done - aim at a new spot"));
+        Feedback::legComplete(*disco_, *laser_, true);
+        // wibble() leaves the laser off; bring it back for aiming
+        laserWibbleActive_ = true;
+        laserOnTime_ = millis() + 200;
+        return;
+    }
+
+    Feedback::readingOk(*disco_); // as for a survey reading
+    disco_->turnOff();            // green ends with the reading, as in survey use
 
     // Alignment: laser off for 500ms then back on (visual feedback)
     if (state_ == CalibState::COLLECTING_ALIGNMENT) {
@@ -759,25 +768,47 @@ void CalibrationMode::showAlignmentProgress() {
     d.setCursor(0, 0);
     d.println(F("Alignment"));
 
-    int stage = (iteration_ > 0) ? ((iteration_ - 1) / 8 + 1) : 1;
-    int inStage = (iteration_ > 0) ? (((iteration_ - 1) % 8) + 1) : 0;
+    // Roll over to the next set as soon as one is finished ("Set 2 of 3,
+    // 0/8"), not on the next point — "Stage 1 8/8" never said to move on.
+    // Only the last point (24/24) leaves this screen, so set 3 never rolls.
+    int set = iteration_ / 8 + 1;
+    int inSet = iteration_ % 8;
 
-    // Stage label
     char buf[16];
-    snprintf(buf, sizeof(buf), "Stage %d", stage);
+    snprintf(buf, sizeof(buf), "Set %d of 3", set);
     d.setTextSize(2);
-    d.setCursor(0, 30);
+    d.setCursor(0, 22);
     d.print(buf);
 
     // Progress counter
-    snprintf(buf, sizeof(buf), "%d/8", inStage);
+    snprintf(buf, sizeof(buf), "%d/8", inSet);
     d.setTextSize(3);
-    d.setCursor(0, 56);
+    d.setCursor(0, 44);
     d.print(buf);
 
-    // Instructions
+    // What to do next. At a set boundary it is an inverted banner, the one
+    // thing on screen that changes look rather than just a number.
     d.setTextSize(1);
-    d.setCursor(0, 100);
+    if (iteration_ > 0 && inSet == 0) {
+        d.fillRect(0, 76, 128, 24, SH110X_WHITE);
+        d.setTextColor(SH110X_BLACK);
+        snprintf(buf, sizeof(buf), "Set %d done!", set - 1);
+        d.setCursor(3, 78);
+        d.print(buf);
+        d.setCursor(3, 89);
+        d.print(F("Aim at a NEW spot"));
+        d.setTextColor(SH110X_WHITE);
+    } else if (inSet == 0) {
+        d.setCursor(0, 80);
+        d.println(F("Aim at a spot, roll"));
+        d.print(F("between each shot"));
+    } else {
+        d.setCursor(0, 80);
+        d.println(F("Same spot - roll"));
+        d.print(F("between each shot"));
+    }
+
+    d.setCursor(0, 118);
     d.print(F("FIRE:record DOWN:undo"));
 
     d.display();
@@ -919,7 +950,7 @@ void CalibrationMode::showSavingScreen() {
 // ── Beep control ────────────────────────────────────────────────────
 
 void CalibrationMode::beep() {
-    // Calibration-only cues (undo, Part 2 "change direction"): a click.
+    // Calibration-only cue (undo): a click.
     // Shot-like events use Feedback:: so they match survey use.
     Sounds::click();
 }
@@ -1363,6 +1394,7 @@ void CalibrationMode::updateFBWaitShot() {
             fbLaserOn_ = true;
         } else {
             fbTakingShot_ = true;
+            fbShotStartMs_ = millis();
             Feedback::shotStart(*disco_);
         }
     }
@@ -1376,8 +1408,19 @@ void CalibrationMode::updateFBWaitShot() {
         return;
     }
 
+    // Same steady gate as a survey shot: tight at the press, relaxing to
+    // steady_tolerance, failed shot if nothing is steady by the timeout
     float az, inc;
-    if (!fbTakingShot_ || !fbSensor_.stableAverage(fbSteadyTol_, az, inc)) {
+    if (!fbTakingShot_) {
+        return;
+    }
+    uint32_t waited = millis() - fbShotStartMs_;
+    if (!fbSensor_.stableAverage(SensorManager::rampedTolerance(waited, fbSteadyTol_), az, inc)) {
+        if (waited >= Defaults::stabilityTimeoutMs) {
+            Serial.println(F("FB: not steady, shot abandoned"));
+            fbTakingShot_ = false;
+            Feedback::failed(*disco_); // laser stays on: FIRE again to retry
+        }
         return;
     }
 

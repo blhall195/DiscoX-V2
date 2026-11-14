@@ -18,6 +18,7 @@
 #include "menu_manager.h"
 #include "rm3100.h"
 #include "sensor_manager.h"
+#include "shot_capture.h"
 #include "snake_game.h"
 #include "feedback.h"
 #include "sounds.h"
@@ -84,6 +85,7 @@ PowerControl power;
 BleManager ble;
 MagCal::Calibration calibration;
 SensorManager sensorMgr;
+static ShotCapture shotCapture; // ~9 KB of bins — static, never a local
 ConfigManager configMgr;
 DiscoManager disco;
 MenuManager menuMgr;
@@ -295,8 +297,7 @@ static float dispInc = 0.0f;                   // currently displayed inclinatio
 static constexpr float DEADBAND_ANGLE = 0.10f; // degrees
 
 // ── Timing statics ──────────────────────────────────────────────────
-static uint32_t lastSensorUpdate = 0;
-static uint32_t lastBatRead = 0;
+static uint32_t lastSensorUpdate = 0;static uint32_t lastBatRead = 0;
 static float lastBatPct = 0.0f;
 static uint32_t lastDisplayRefresh = 0;
 static uint32_t lastBleCheck = 0;
@@ -1628,6 +1629,34 @@ static void pollButtons(uint32_t now) {
 }
 
 // ── Measurement workflow ────────────────────────────────────────
+// Sensor sampling for the shot in progress. Runs from the laser driver's
+// wait loop (LDJ100 idle hook) while the module ranges, so it must stay
+// short and must not touch the laser, the display or storage: just the mag
+// (I2C) and accel (SPI) reads, pooled into shotCapture.
+static void shotSampleTick() {
+    static uint32_t lastTick = 0;
+    uint32_t now = millis();
+    if (now - lastTick < Timing::SENSOR_POLL_MS) {
+        return;
+    }
+    lastTick = now;
+
+    if (mag.measurementComplete()) {
+        RM3100::Reading mr = mag.getLastReading();
+        mag.toMicroTesla(mr, lastMagX, lastMagY, lastMagZ);
+        mag.startSingleReading();
+        shotCapture.addMag(now, lastMagX, lastMagY, lastMagZ);
+    }
+
+    float gx, gy, gz;
+    if (accel.readAcceleration(gx, gy, gz)) {
+        lastAccX = gx * GRAVITY_MS2;
+        lastAccY = gy * GRAVITY_MS2;
+        lastAccZ = gz * GRAVITY_MS2;
+        shotCapture.addAccel(now, lastAccX, lastAccY, lastAccZ);
+    }
+}
+
 static void pollMeasurement(uint32_t now) {
     if (ctx.currentState != SystemState::TAKING_MEASUREMENT) {
         return;
@@ -1644,34 +1673,10 @@ static void pollMeasurement(uint32_t now) {
         return;
     }
 
-    // A leg waits for ~0.3 s of steady readings and records their average;
-    // quick shots skip the wait and take the live EMA. (In Beta)
-    float shotAz = sensorMgr.getAzimuth();
-    float shotInc = sensorMgr.getInclination();
-    float spread = 0.0f;
-    if (!ctx.quickShot &&
-        !sensorMgr.stableAverage(ctx.config.stabilityTolerance, shotAz, shotInc, &spread)) {
-        static uint32_t lastStabDbg = 0;
-        uint32_t n = millis();
-        if (n - lastStabDbg > 1000) {
-            lastStabDbg = n;
-            Serial.print(F("MEAS: waiting stable  AZ="));
-            Serial.print(sensorMgr.getAzimuth(), 1);
-            Serial.print(F(" INC="));
-            Serial.print(sensorMgr.getInclination(), 1);
-            Serial.print(F(" spread="));
-            Serial.println(spread, 2);
-        }
-        return;
-    }
-
-    Serial.print(F("MEAS: taking measurement  spread="));
-    Serial.println(spread, 2);
-
-    // ── Stable — take measurement ────────────────────────────
-    ctx.readings.azimuth = shotAz;
-    ctx.readings.inclination = shotInc;
-    ctx.readings.roll = sensorMgr.getRoll();
+    // No waiting for a steady window before the laser fires (2026-11-14): the
+    // compass and tilt sensors are sampled for the whole time the laser
+    // spends ranging, and the reading is the average of that hold — see
+    // shot_capture.h. Splays go the same way, with a looser motion limit.
 
     // Flush any stale UART data before talking to laser
     while (Serial1.available()) {
@@ -1682,9 +1687,16 @@ static void pollMeasurement(uint32_t now) {
     // Take laser distance — multi-shot validated (rejects dark/specular
     // targets rather than passing a plausible-but-wrong distance downstream)
     Serial.println(F("MEAS: sending measure cmd..."));
+    shotCapture.begin(millis());
     int32_t distMm = 0;
-    LaserError lErr = laser.measureValidated(distMm, ctx.config.laserShots,
-                                             ctx.config.laserSqLimit, ctx.config.laserSpreadLimitMm);
+    LaserError lErr = laser.measureValidated(distMm, ctx.config.laserShots, ctx.config.laserSqLimit,
+                                             ctx.config.laserSpreadLimitMm, shotSampleTick);
+    // A bright target can return all its shots in well under a second:
+    // keep sampling to the minimum the average needs
+    while (lErr == LaserError::OK && shotCapture.elapsedMs(millis()) < Defaults::shotCaptureMinMs) {
+        shotSampleTick();
+        delay(1);
+    }
     Serial.print(F("MEAS: result="));
     Serial.print(LaserManager::errorString(lErr));
     Serial.print(F(" mm="));
@@ -1757,6 +1769,38 @@ static void pollMeasurement(uint32_t now) {
         return;
     }
 
+    // Angles from the hold. steady_tolerance is now "how far may any 0.1 s
+    // of the hold sit from the average" — a did-it-move check, not the gate
+    // the accuracy rests on.
+    static ShotCapture::Result shot; // static: two Eigen vectors + the 4 KB loop stack
+    float moveTol = ctx.quickShot ? Defaults::quickShotStabilityTol : ctx.config.stabilityTolerance;
+    ShotCapture::Status capStatus = shotCapture.finish(calibration, moveTol, shot);
+    Serial.print(F("MEAS: capture ms="));
+    Serial.print(shotCapture.elapsedMs(millis()));
+    Serial.print(F(" bins="));
+    Serial.print(shot.binsUsed);
+    Serial.print('/');
+    Serial.print(shot.binsTotal);
+    Serial.print(F(" spread="));
+    Serial.print(shot.spreadDeg, 2);
+    Serial.print(F(" tol="));
+    Serial.println(moveTol, 2);
+    if (capStatus != ShotCapture::Status::OK) {
+        if (capStatus == ShotCapture::Status::MOVED) {
+            Serial.println(F("MEAS: device moved during the shot"));
+            alertError("UNSTEADY", "Hold still\nFire again");
+        } else {
+            Serial.println(F("MEAS: no sensor data during the shot"));
+            alertError("SENSOR", "No data\nFire again");
+        }
+        ctx.quickShot = false;
+        ctx.currentState = SystemState::IDLE;
+        return;
+    }
+    ctx.readings.azimuth = shot.azimuth;
+    ctx.readings.inclination = shot.inclination;
+    ctx.readings.roll = shot.roll;
+
     ctx.readings.distance =
         (distMm / 1000.0f) +
         (ctx.config.measureFromFront ? -Defaults::laserFrontOffset : ctx.config.laserDistanceOffset);
@@ -1768,11 +1812,10 @@ static void pollMeasurement(uint32_t now) {
     // Anomaly detection
     Serial.println(F("MEAS: checking anomaly..."));
     if (ctx.config.anomalyDetection) {
-        Eigen::Vector3f rawMag(lastMagX, lastMagY, lastMagZ);
-        Eigen::Vector3f rawGrav(lastAccX, lastAccY, lastAccZ);
+        // On the vectors the reading was made from, not one stray sample
         MagCal::Strictness strict = {ctx.config.magTolerance, ctx.config.gravTolerance,
                                      ctx.config.dipTolerance};
-        MagCal::AnomalyType anom = calibration.checkAnomaly(rawMag, rawGrav, strict);
+        MagCal::AnomalyType anom = calibration.checkAnomaly(shot.meanMag, shot.meanAccel, strict);
         if (anom != MagCal::AnomalyType::NONE) {
             const char *errStr = "Err";
             switch (anom) {

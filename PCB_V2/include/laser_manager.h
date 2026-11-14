@@ -58,8 +58,10 @@ class LaserManager {
     // INCONSISTENT) instead of returning a plausible-but-wrong distance.
     // Every shot is logged to Serial as "LZRSQ mm= sq= st=" for threshold
     // calibration. See discox-sq-rejection-brief.md.
+    // idle (optional) is called repeatedly while the module is ranging, so
+    // the caller can keep sampling its sensors — see LDJ100::setIdleHook.
     LaserError measureValidated(int32_t &distanceMm, uint8_t shots, uint16_t sqLimit,
-                                uint16_t spreadLimitMm);
+                                uint16_t spreadLimitMm, void (*idle)() = nullptr);
 
     LaserError lastError() const { return _lastError; }
 
@@ -74,6 +76,8 @@ class LaserManager {
   private:
     // Map an LDJ100 error-frame status (signed int16) to LaserError.
     static LaserError mapStatus(uint16_t status);
+
+    LaserError measureShots(int32_t &distanceMm, uint8_t shots, uint16_t sqLimit, uint16_t spreadLimitMm);
 
     LDJ100 _ldj;
     LaserError _lastError = LaserError::OK;

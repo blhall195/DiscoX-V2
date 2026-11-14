@@ -153,6 +153,14 @@ bool SensorManager::stableAverage(float toleranceDeg, float &az, float &inc, flo
     return true;
 }
 
+float SensorManager::rampedTolerance(uint32_t elapsedMs, float loosestDeg) {
+    float tight = Defaults::stabilityToleranceTight;
+    if (!(loosestDeg > tight) || elapsedMs >= Defaults::stabilityRampMs) {
+        return loosestDeg; // also the path for a steady_tolerance set at or below the tight start
+    }
+    return tight + (loosestDeg - tight) * ((float)elapsedMs / (float)Defaults::stabilityRampMs);
+}
+
 void SensorManager::resetStability() {
     stabHead_ = 0;
     stabCount_ = 0;

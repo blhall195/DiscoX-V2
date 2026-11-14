@@ -63,7 +63,15 @@ LaserError LaserManager::measure(int32_t &distanceMm, uint16_t *sq) {
 }
 
 LaserError LaserManager::measureValidated(int32_t &distanceMm, uint8_t shots, uint16_t sqLimit,
-                                          uint16_t spreadLimitMm) {
+                                          uint16_t spreadLimitMm, void (*idle)()) {
+    _ldj.setIdleHook(idle);
+    LaserError err = measureShots(distanceMm, shots, sqLimit, spreadLimitMm);
+    _ldj.setIdleHook(nullptr); // only ever live for the duration of this call
+    return err;
+}
+
+LaserError LaserManager::measureShots(int32_t &distanceMm, uint8_t shots, uint16_t sqLimit,
+                                      uint16_t spreadLimitMm) {
     if (shots < 1) {
         shots = 1;
     } else if (shots > Defaults::laserShotsMax) {

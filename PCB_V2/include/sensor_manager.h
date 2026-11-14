@@ -31,6 +31,12 @@ class SensorManager {
     bool stableAverage(float toleranceDeg, float &az, float &inc, float *spreadDeg = nullptr) const;
     void resetStability();
 
+    /// Tolerance to pass to stableAverage elapsedMs after the shot was
+    /// requested: Defaults::stabilityToleranceTight at the press, relaxing
+    /// linearly to loosestDeg (the user's steady_tolerance) over
+    /// Defaults::stabilityRampMs. Never looser than loosestDeg.
+    static float rampedTolerance(uint32_t elapsedMs, float loosestDeg);
+
   private:
     // EMA-smoothed output angles
     float emaAz_ = 0.0f;

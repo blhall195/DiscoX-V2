@@ -166,6 +166,7 @@ class CalibrationMode {
     // loop's SensorManager is not updated while calibration mode runs.
     SensorManager fbSensor_;
     float fbSteadyTol_ = Defaults::stabilityTolerance;
+    uint32_t fbShotStartMs_ = 0; // millis() of the FIRE press that started the current shot
 
     // Leg consistency buffer (3 shots must agree, as for a survey leg)
     static constexpr int FB_LEG_LEN = 3;

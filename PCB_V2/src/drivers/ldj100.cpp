@@ -33,6 +33,9 @@ bool LDJ100::readByte(uint8_t &b, uint32_t deadline) {
             b = (uint8_t)serial_->read();
             return true;
         }
+        if (idle_) {
+            idle_();
+        }
         yield();
     }
     return false;

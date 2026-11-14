@@ -55,6 +55,12 @@ class LDJ100 {
     // module error — an error also sets lastStatus() non-zero.
     bool poll(Measurement &m, uint32_t timeoutMs = 300);
 
+    // Called repeatedly while waiting for the module to reply (nullptr =
+    // none). Lets the caller keep sampling its sensors during a slow
+    // measurement. Must be quick (a couple of ms at most, so the UART RX
+    // buffer can't overflow) and must not touch this driver.
+    void setIdleHook(void (*fn)()) { idle_ = fn; }
+
     // Status code from the most recent 0xEE error frame (0 = none).
     uint16_t lastStatus() const { return lastStatus_; }
     static const char *statusText(uint16_t status);
@@ -83,4 +89,5 @@ class LDJ100 {
     Stream *serial_ = nullptr;
     uint8_t addr_ = 0x00;
     uint16_t lastStatus_ = 0;
+    void (*idle_)() = nullptr;
 };
