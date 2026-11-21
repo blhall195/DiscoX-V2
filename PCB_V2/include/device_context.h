@@ -39,6 +39,7 @@ struct Config {
     uint32_t autoShutdownTimeout = Defaults::autoShutdownTimeout;
     uint32_t laserTimeout = Defaults::laserTimeout;
     uint32_t standbyTimeout = Defaults::standbyTimeout;
+    uint8_t chargeLimit = Defaults::chargeLimit; // 80/90/100 — see ChargePolicy
     bool laserWibble = Defaults::laserWibble;
     uint8_t laserShots = Defaults::laserShots;
     uint16_t laserSqLimit = Defaults::laserSqLimit;
@@ -69,6 +70,10 @@ struct DeviceContext {
     bool discoOn = false;
     bool laserOnFlag = true;
     bool quickShot = false; // true = use wider stability tolerance (button 2)
+
+    // Hardware: charger CHG/CE wired to the MCU (2026-10-18 PCB revision).
+    // Read from the board strap at boot; gates the charge-limit setting.
+    bool chargeControl = false;
 
     // BLE / connectivity
     bool bleConnected = false;

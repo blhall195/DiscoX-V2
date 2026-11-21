@@ -1,6 +1,7 @@
 #include "ble_manager.h"
 #include "button_manager.h"
 #include "calibration_mode.h"
+#include "charge_policy.h"
 #include "config.h"
 #include "config_manager.h"
 #include "defaults.h"
@@ -9,6 +10,7 @@
 #include "disco_manager.h"
 #include "display_manager.h"
 #include "drivers/buzzer.h"
+#include "drivers/charger.h"
 #include "drivers/max17048.h"
 #include "drivers/power.h"
 #include "drivers/sca3300.h"
@@ -83,6 +85,7 @@ DisplayManager display;
 LaserManager laser;
 Buzzer buzzer;
 PowerControl power;
+Charger charger;
 BleManager ble;
 MagCal::Calibration calibration;
 SensorManager sensorMgr;
@@ -341,6 +344,32 @@ static bool drainInFlight = false;
 static bool pwrBtnArmed = false;    // set once INT first reads HIGH
 static uint32_t pwrBtnLowSince = 0; // millis() when INT first read LOW (0 = idle)
 
+// ── USB plug-in pulse (2026-10-18+ boards) ──────────────────────────
+// Plugging in USB drives PWR_TOG through C30/Q3 for ~0.2-1 s, which powers
+// the board on when it's off — and, when it's already on, pulls INT low
+// exactly like a power-button press. A press confirmed within
+// PLUG_PULSE_WINDOW_MS of VBUS appearing is the cable, not a finger.
+static bool vbusWasPresent = false;
+static uint32_t vbusRoseAt = 0; // millis() of the last VBUS rising edge (0 = none yet)
+static constexpr uint32_t PLUG_PULSE_WINDOW_MS = 300;
+
+// ── Charging (see "Charging" in CLAUDE.md and charge_policy.h) ──────
+static ChargePolicy::Memory chargeMem;
+static ChargePolicy::State chargeState = ChargePolicy::State::UNPLUGGED;
+static float chargeVolts = 0.0f;  // last gauge cell voltage while on USB
+static uint32_t lastChargeTick = 0;
+static bool chargeUsbWas = false;
+static bool chargeTickPending = true; // run a decision as soon as possible
+static constexpr uint32_t CHARGE_POLL_MS = 2000;    // decision + gauge read while on USB
+static constexpr uint32_t CHARGE_SETTLE_MS = 1000;  // after plug-in, before the first decision
+// Charging screen and OLED burn-in: it is the same pixels for the whole
+// charge, so each time it lights it dims after a minute and goes off after
+// two (the RGB LED carries the charge state meanwhile). Any button relights it.
+static constexpr uint32_t CHARGE_SCREEN_DIM_MS = 60000;
+static constexpr uint32_t CHARGE_SCREEN_OFF_MS = 120000;
+static constexpr uint8_t CHARGE_SCREEN_DIM_LEVEL = 16; // OLED contrast, of 255
+static uint32_t bootResetReas = 0; // NRF_POWER->RESETREAS at the start of setup()
+
 // ── Forward declarations — init ────────────────────────────────────
 static void initPins();
 static void scanI2C();
@@ -386,6 +415,11 @@ static void handleMeasurementSuccess();
 static void alertError(const char *errCode, const char *detail = nullptr);
 static void resetLaser();
 static void doShutdown();
+static void serviceCharging(uint32_t now);
+static void printChargeStatus(); // 'g' on serial
+static bool chargeScreenInsteadOfOff();
+static void runChargingScreen(bool atBoot, bool startDark);
+static void warnIfChargingWhileOff();
 static void enterUsbDriveMode(); // modal USB MSC settings drive — reboots on exit
 static void storageFactoryReset(bool damaged); // DOWN+MENU / storage fault — resets if confirmed
 
@@ -412,10 +446,16 @@ void laserOff() {
 // ── Setup ─────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 void setup() {
+    bootResetReas = NRF_POWER->RESETREAS; // before anything can disturb it
+
     // Power controller first: KILL stays high-Z so nothing can cut the rail,
-    // INT/PGOOD become inputs. (The power-on button press is still in flight —
+    // INT becomes an input. (The power-on button press is still in flight —
     // the boot-hold guard in pollPowerButton keeps it from powering us off.)
-    power.begin(PIN_KILL, PIN_PB_INT, PIN_PGOOD);
+    power.begin(PIN_KILL, PIN_PB_INT);
+    // Board strap + charger pins (new boards only; old ones are left alone)
+    charger.begin(PIN_BOARD_ID, PIN_CHG, PIN_PGOOD, PIN_CHG_EN);
+    ctx.chargeControl = charger.hasControl();
+    disco.begin(); // the charging screen lights it before initDisco() would
     buzzer.begin(PIN_BUZZER_A, PIN_BUZZER_B);
     Sounds::begin(buzzer);
 
@@ -518,25 +558,15 @@ void setup() {
     } else {
         Serial.println(bootHoldResult == BootHold::NO_INT ? F("INT never low - gate skipped") : F("skipped (USB or reset)"));
     }
+    Serial.print(F("Board:       "));
+    Serial.println(charger.hasControl() ? F("charger control (2026-10-18+ PCB)") : F("no charger control (older PCB)"));
+    Serial.print(F("Reset:       RESETREAS=0x"));
+    Serial.print(bootResetReas, HEX);
+    Serial.print(F(" USB="));
+    Serial.println(Charger::usbPresent() ? F("yes") : F("no"));
     Serial.println();
 
-    initPins();
-    buttons.begin();
-
-    // ── Sensors ──
-    magOk = mag.begin(Wire, RM3100_I2C_ADDR, RM3100_CYCLE_COUNT, PIN_MAG_DRDY);
-    if (magOk) {
-        mag.startSingleReading(); // kick off first non-blocking read
-    }
-    Serial.print(F("RM3100:      "));
-    Serial.println(magOk ? F("OK") : F("FAILED"));
-
-    // MODE_1 (±3 g, 70 Hz LPF): closest dynamics to V1's 4G/104Hz setup, and
-    // ±1.5 g modes would clip during disco shake detection (11 m/s² threshold)
-    accelOk = accel.begin(accelSpi, PIN_SCA3300_CS, SCA3300::Mode::MODE_1);
-    Serial.print(F("SCA3300:     "));
-    Serial.println(accelOk ? F("OK") : F("FAILED"));
-
+    // Battery gauge ahead of the sensors: the charging screen needs it
     batOk = battery.begin(&Wire);
     if (batOk) {
         delay(100); // let SOC register update after wake
@@ -557,6 +587,40 @@ void setup() {
     }
     Serial.println();
 
+    // ── Plugged in while off (new boards): charging screen, not survey ──
+    // The USB auto-on circuit powered us up. Stay on this screen until a
+    // button is pressed (then boot on, straight to the readings: the charging
+    // screen already had its animation), the power button is held (off) or
+    // the cable comes out (off). A cold power-on only: resets, DFU and
+    // post-update reboots with USB attached still boot normally.
+    bool fromChargingScreen = false;
+    {
+        const uint32_t notPowerOn = POWER_RESETREAS_SREQ_Msk | POWER_RESETREAS_DOG_Msk |
+                                    POWER_RESETREAS_LOCKUP_Msk | POWER_RESETREAS_RESETPIN_Msk;
+        if (charger.hasControl() && Charger::usbPresent() && !(bootResetReas & notPowerOn)) {
+            runChargingScreen(true, false);
+            fromChargingScreen = true;
+        }
+    }
+
+    initPins();
+    buttons.begin();
+
+    // ── Sensors ──
+    magOk = mag.begin(Wire, RM3100_I2C_ADDR, RM3100_CYCLE_COUNT, PIN_MAG_DRDY);
+    if (magOk) {
+        mag.startSingleReading(); // kick off first non-blocking read
+    }
+    Serial.print(F("RM3100:      "));
+    Serial.println(magOk ? F("OK") : F("FAILED"));
+
+    // MODE_1 (±3 g, 70 Hz LPF): closest dynamics to V1's 4G/104Hz setup, and
+    // ±1.5 g modes would clip during disco shake detection (11 m/s² threshold)
+    accelOk = accel.begin(accelSpi, PIN_SCA3300_CS, SCA3300::Mode::MODE_1);
+    Serial.print(F("SCA3300:     "));
+    Serial.println(accelOk ? F("OK") : F("FAILED"));
+    Serial.println();
+
     // ── Splash, then straight to the reading screen ──────────────────
     // The splash plays (blocking, so it runs smoothly at the panel's full
     // frame rate) after the sensors and battery gauge are up, then hands
@@ -564,8 +628,9 @@ void setup() {
     // (~0.8 s) and BLE (~0.5 s) finish starting — so the end of the animation
     // never freezes. Live readings start once setup() returns. Boot warning
     // screens below still draw over it; the switch further down redraws the
-    // main screen with the loaded settings either way.
-    {
+    // main screen with the loaded settings either way. No splash after the
+    // charging screen: the user is already looking at a lit, working device.
+    if (!fromChargingScreen) {
         const char *nameSuffix = strchr(ctx.config.bleName, '_');
         display.playSplash(ctx.config.splashStyle, nameSuffix ? nameSuffix + 1 : nullptr);
     }
@@ -627,8 +692,10 @@ void setup() {
     }
 
     // ── Low battery check on boot ────────────────────────────────
-    // Skip if 0% — that means no LiPo connected (USB-only power)
-    if (batOk && lastBatPct > 0.5f && lastBatPct <= Timing::BATTERY_SHUTDOWN_PCT) {
+    // Skip if 0% — that means no LiPo connected (USB-only power) — and on
+    // USB, which runs the device whatever the battery holds (a flat cell
+    // that woke on plug-in must not switch straight back off)
+    if (batOk && !Charger::usbPresent() && lastBatPct > 0.5f && lastBatPct <= Timing::BATTERY_SHUTDOWN_PCT) {
         Serial.println(F("LOW BATTERY — shutting down"));
         if (dispOk) {
             display.updateDistanceText("LOW");
@@ -787,6 +854,11 @@ void loop() {
 
     uint32_t now = millis();
 
+    // Charge limit + LED, in every mode the loop runs (menu, calibration,
+    // snake, standby included): the limit only holds while this keeps running
+    serviceCharging(now);
+    disco.tickBase();
+
     // ── Standby: only the power button, BLE delivery and the timeout run ──
     if (standbyActive) {
         serviceStandby(now);
@@ -928,6 +1000,7 @@ void loop() {
                 d.display();
             }
             while (!TinyUSBDevice.mounted()) {
+                serviceCharging(millis());
                 buttons.update();
                 if (buttons.wasPressed(Button::MENU)) {
                     Serial.println(F("Bootloader entry cancelled"));
@@ -1261,6 +1334,8 @@ static void readSensorsUpdate(uint32_t now) {
             Serial.print(sap6.resendCount());
             Serial.print(F(" failedSends="));
             Serial.println(sap6.failedSendCount());
+        } else if (c == 'g' || c == 'G') {
+            printChargeStatus(); // charger pins, gauge, limit and hold
         } else if (c == 'c' || c == 'C') {
             Serial.println(F("--- /config.json ---"));
             if (!configMgr.printConfig(Serial)) {
@@ -2194,6 +2269,14 @@ static void pollBLECommands(uint32_t now) {
 static bool powerButtonPressed(uint32_t now) {
     bool pressed = power.buttonPressed(); // INT reads LOW
 
+    // Every caller polls this often (all loops, modal screens included), so
+    // VBUS edges are tracked here for the plug-in pulse filter below
+    const bool vbus = Charger::usbPresent();
+    if (vbus && !vbusWasPresent) {
+        vbusRoseAt = now ? now : 1;
+    }
+    vbusWasPresent = vbus;
+
     if (!pwrBtnArmed) {
         if (!pressed) {
             pwrBtnArmed = true;
@@ -2209,8 +2292,18 @@ static bool powerButtonPressed(uint32_t now) {
     if (pwrBtnLowSince == 0) {
         pwrBtnLowSince = now;                // LOW edge — start confirm window
     } else if (now - pwrBtnLowSince >= 20) { // 20 ms confirm (INT pulses <1 s)
-        pwrBtnArmed = false;
+        pwrBtnArmed = false; // either way, nothing more until INT is released
+        const uint32_t lowAt = pwrBtnLowSince;
         pwrBtnLowSince = 0;
+        // The USB auto-on pulse, not a press. Q3 switches as VBUS rises past
+        // its gate threshold, so INT can fall a little before or after the
+        // nRF registers VBUS: allow either order within the window.
+        if (vbusRoseAt != 0 && (now - vbusRoseAt < PLUG_PULSE_WINDOW_MS)) {
+            Serial.print(F("POWER: USB plug-in pulse ignored (INT low "));
+            Serial.print((int32_t)(lowAt - vbusRoseAt));
+            Serial.println(F(" ms after VBUS)"));
+            return false;
+        }
         return true;
     }
     return false;
@@ -2344,6 +2437,17 @@ static void serviceStandby(uint32_t now) {
         return;
     }
     if (now - standbySince >= ctx.config.standbyTimeout * 1000UL) {
+        if (chargeScreenInsteadOfOff()) {
+            // Plugged in: stay on so the charge limit holds. Leave standby
+            // (and its backstop) for the charging screen, still dark.
+            Serial.println(F("Standby timeout on USB — charging screen"));
+            standbyActive = false;
+            if (standbyBackstop) {
+                xTimerStop(standbyBackstop, 0);
+            }
+            runChargingScreen(false, true);
+            return;
+        }
         Serial.println(F("Standby timeout — powering off"));
         doShutdown();
     }
@@ -2417,6 +2521,7 @@ static void servicePowerHold(uint32_t now) {
                 static const char *const kLines[] = {"Powering", "off"};
                 display.showPowerPrompt(kLines, 2, 1.0f);
             }
+            warnIfChargingWhileOff();
             doShutdown();
         }
         // Not on a quick tap: the bar only appears once it's clearly a hold
@@ -2466,8 +2571,13 @@ static void servicePowerHold(uint32_t now) {
         unit = "minute";
     }
     char hint[64];
-    snprintf(hint, sizeof(hint), "Powers down after\n%lu %s%s\nHold to shut down", (unsigned long)n, unit,
-             n == 1 ? "" : "s");
+    if (chargeScreenInsteadOfOff()) {
+        // On USB the timeout leads to the charging screen, not power-off
+        snprintf(hint, sizeof(hint), "Stays on to charge\nHold to shut down");
+    } else {
+        snprintf(hint, sizeof(hint), "Powers down after\n%lu %s%s\nHold to shut down", (unsigned long)n, unit,
+                 n == 1 ? "" : "s");
+    }
     display.showPowerPrompt(kLines, 2, -1.0f, hint);
     standbyNotice = true;
     standbySince = now; // notice start; enterStandby() resets it
@@ -2555,6 +2665,403 @@ static void bootHoldGate() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// ── Charging ──────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// Every loop (and every modal loop that can run for long on USB) calls
+// serviceCharging(): on USB it reads the gauge every CHARGE_POLL_MS, lets
+// ChargePolicy decide, drives CE, and sets the LED base colour and the
+// battery icon. Old boards get the LED and icon from the gauge alone; their
+// charger can't be held off.
+
+static const __FlashStringHelper *chargeStateName(ChargePolicy::State s) {
+    switch (s) {
+    case ChargePolicy::State::CHARGING:
+        return F("charging");
+    case ChargePolicy::State::PAUSED:
+        return F("paused");
+    case ChargePolicy::State::COMPLETE:
+        return F("complete");
+    case ChargePolicy::State::UNPLUGGED:
+    default:
+        return F("unplugged");
+    }
+}
+
+static void printChargeStatus() {
+    Serial.print(F("CHARGE: "));
+    Serial.print(chargeStateName(chargeState));
+    Serial.print(F(" usb="));
+    Serial.print(Charger::usbPresent());
+    Serial.print(F(" soc="));
+    Serial.print(lastBatPct, 2);
+    Serial.print(F(" v="));
+    Serial.print(chargeVolts, 3);
+    if (charger.hasControl()) {
+        Serial.print(F(" chg="));
+        Serial.print(charger.chargingSignal());
+        Serial.print(F(" pgood="));
+        Serial.print(charger.powerGood());
+        Serial.print(F(" ce="));
+        Serial.print(charger.chargingEnabled() ? F("on") : F("HELD OFF"));
+        Serial.print(F(" limit="));
+        Serial.print(ctx.config.chargeLimit);
+        Serial.println('%');
+    } else {
+        Serial.println(F(" (older PCB: no charger control)"));
+    }
+}
+
+static void serviceCharging(uint32_t now) {
+    const bool usb = Charger::usbPresent();
+    if (usb != chargeUsbWas) {
+        chargeUsbWas = usb;
+        if (usb) {
+            // CHG takes a moment to assert after plug-in: decide a second
+            // from now rather than call it "paused" on the first reading
+            lastChargeTick = now - CHARGE_POLL_MS + CHARGE_SETTLE_MS;
+            chargeTickPending = false;
+        } else {
+            chargeTickPending = true; // decide now: release any hold, LED off
+        }
+    }
+    if (!chargeTickPending && (!usb || now - lastChargeTick < CHARGE_POLL_MS)) {
+        return;
+    }
+    chargeTickPending = false;
+    lastChargeTick = now;
+
+    ChargePolicy::Inputs in;
+    in.usb = usb;
+    in.hasControl = charger.hasControl();
+    in.chgLow = charger.chargingSignal();
+    in.limit = ctx.config.chargeLimit;
+    if (usb && batOk) {
+        const float soc = battery.cellPercent();
+        const float volts = battery.cellVoltage();
+        if (soc == soc && volts == volts) { // NaN = failed read
+            in.gaugeOk = true;
+            in.soc = soc;
+            in.volts = volts;
+            lastBatPct = soc;
+            ctx.readings.batteryLevel = soc;
+            chargeVolts = volts;
+            if (dispOk) {
+                display.updateBattery(soc);
+            }
+        }
+    }
+
+    const ChargePolicy::Output out = ChargePolicy::step(chargeMem, in);
+    charger.setChargingEnabled(!out.disableCharging);
+    if (out.state != chargeState) {
+        chargeState = out.state;
+        printChargeStatus();
+    }
+
+    if (dispOk) {
+        display.setBatteryMode(chargeState == ChargePolicy::State::CHARGING   ? BatteryMode::CHARGING
+                               : chargeState == ChargePolicy::State::COMPLETE ? BatteryMode::FULL
+                                                                              : BatteryMode::NORMAL);
+    }
+    disco.setBase(ChargePolicy::ledFor(chargeState, lastBatPct));
+}
+
+// On USB, a new board stays on in the charging screen instead of powering
+// off on a timeout, so the charge limit keeps holding (off, R23 turns the
+// charger back on and it runs to 4.2 V).
+static bool chargeScreenInsteadOfOff() { return charger.hasControl() && Charger::usbPresent(); }
+
+// About to power off on USB with a limit below 100%: say what happens next.
+// Short, because the LTC2954 kills the rail itself if the button is still
+// held (>= ~2.3 s worst case); storage is already safe by then.
+static void warnIfChargingWhileOff() {
+    if (!dispOk || !charger.hasControl() || !Charger::usbPresent() || ctx.config.chargeLimit >= 100) {
+        return;
+    }
+    Serial.println(F("SHUTDOWN: on USB, limit below 100% - it will charge to 100% while off"));
+    static const char *const kLines[] = {"Charging", "to 100%", "while off"};
+    display.setSleep(false);
+    display.showPowerPrompt(kLines, 3);
+    delay(1500);
+}
+
+static bool anyButtonDownRaw() {
+    return digitalRead(PIN_BTN_FIRE) == LOW || digitalRead(PIN_BTN_UP_DISCO) == LOW ||
+           digitalRead(PIN_BTN_DOWN) == LOW || digitalRead(PIN_BTN_MENU) == LOW;
+}
+
+static float chargeScreenPct = -1.0f; // shown %, see readGaugeForChargingScreen()
+
+// introT < 0: the plain screen; otherwise that frame of the opening animation.
+// offInMs: time left before the screen goes off (OLED burn-in), shown as a
+// countdown with how to bring it back.
+static void drawChargingScreen(uint32_t offInMs, int32_t introT = -1) {
+    const char *status = "Charging";
+    if (chargeState == ChargePolicy::State::COMPLETE) {
+        status = "Charged";
+    } else if (chargeState == ChargePolicy::State::PAUSED) {
+        status = "Paused";
+    }
+    char limitLine[22];
+    const char *note = nullptr;
+    if (chargeState == ChargePolicy::State::PAUSED) {
+        note = "Too hot or cold?"; // the charger's thermistor (or its safety timer)
+    } else if (charger.hasControl() && ctx.config.chargeLimit < 100) {
+        snprintf(limitLine, sizeof(limitLine), "Charge limit %u%%", (unsigned)ctx.config.chargeLimit);
+        note = limitLine;
+    }
+    const uint32_t secs = (offInMs + 999) / 1000; // round up: 2:00 while the full time is left
+    char offLine[22];
+    snprintf(offLine, sizeof(offLine), "Screen off in %lu:%02lu", (unsigned long)(secs / 60),
+             (unsigned long)(secs % 60));
+    const char *const hints[DisplayManager::CHARGING_HINTS] = {"Any button to use", offLine,
+                                                               "Press button to wake"};
+    const float pct = ChargePolicy::displayPercent(chargeScreenPct >= 0.0f ? chargeScreenPct : lastBatPct);
+    if (introT >= 0) {
+        display.showChargingIntro((uint32_t)introT, pct, batOk, status, note, hints);
+    } else {
+        display.showChargingScreen(pct, batOk, status, note, hints);
+    }
+}
+
+// The charging screen's opening animation (~2.2 s), lands on the screen
+// itself. Charging keeps being serviced; any button or unplugging skips it
+// (the press doesn't also leave the screen: the loop waits for a release).
+static void playChargingIntro() {
+    const uint32_t start = millis();
+    for (;;) {
+        const uint32_t now = millis();
+        serviceCharging(now);
+        disco.tickBase();
+        const uint32_t t = now - start;
+        if (t >= DisplayManager::CHARGING_INTRO_MS || anyButtonDownRaw() || !Charger::usbPresent()) {
+            return;
+        }
+        drawChargingScreen(CHARGE_SCREEN_OFF_MS, (int32_t)t); // the I2C push paces it at ~20 fps
+    }
+}
+
+// The % on the charging screen, filled in between gauge updates. The MAX17048
+// only moves its SOC about every 12 s (measured 2026-11-21 while charging at
+// ~50 %/h: steps of ~0.16 % every 11.8 s), which on a 2 d.p. readout looks
+// stuck then jumpy. Between updates the shown value advances at the gauge's
+// own CRATE (%/h), at most 15 s past the last update, and never runs
+// backwards: a real reading below it holds it until the estimate catches
+// up. When not charging it is just the reading.
+static void readGaugeForChargingScreen() {
+    static float anchorSoc = -1.0f; // last real reading
+    static uint32_t anchorAt = 0;   // when it changed
+    constexpr uint32_t kMaxExtrapolateMs = 15000;
+    if (!batOk) {
+        return;
+    }
+    const float soc = battery.cellPercent();
+    if (soc != soc) {
+        return; // NaN: failed read, keep the last value
+    }
+    lastBatPct = soc;
+    const uint32_t now = millis();
+    if (soc != anchorSoc) {
+        anchorSoc = soc;
+        anchorAt = now;
+    }
+    float rate = 0.0f; // %/h
+    if (chargeState == ChargePolicy::State::CHARGING) {
+        rate = battery.chargeRate();
+        if (!(rate > 0.0f) || rate > 200.0f) { // NaN, discharging, or nonsense
+            rate = 0.0f;
+        }
+    }
+    if (rate == 0.0f || chargeScreenPct < 0.0f) {
+        chargeScreenPct = soc;
+        return;
+    }
+    uint32_t since = now - anchorAt;
+    if (since > kMaxExtrapolateMs) {
+        since = kMaxExtrapolateMs;
+    }
+    const float estimate = anchorSoc + rate * (float)since / 3600000.0f;
+    if (estimate > chargeScreenPct) {
+        chargeScreenPct = estimate;
+    }
+}
+
+// The power button on the charging screen: a short press toggles the screen,
+// a hold powers off (with the 100% warning). Returns on release.
+static void chargingScreenPowerHold() {
+    const uint32_t start = millis();
+    if (flashOk && configMgr.hasPendingToSync()) {
+        configMgr.syncPendingToFlash(); // the LTC2954 may cut power before the bar fills
+    }
+    flash_nrf5x_flush();
+    uint32_t lastBar = 0;
+    while (power.buttonPressed()) {
+        const uint32_t held = millis() - start;
+        if (held >= Timing::POWER_HOLD_OFF_MS) {
+            Serial.println(F("SHUTDOWN: power button held (charging screen)"));
+            if (dispOk) {
+                static const char *const kLines[] = {"Powering", "off"};
+                display.setSleep(false);
+                display.showPowerPrompt(kLines, 2, 1.0f);
+            }
+            warnIfChargingWhileOff();
+            doShutdown();
+        }
+        if (dispOk && held >= Timing::POWER_BAR_DELAY_MS && (lastBar == 0 || millis() - lastBar >= 40)) {
+            if (lastBar == 0) {
+                display.setSleep(false); // the bar shows even from a dark screen
+            }
+            showHoldBar((float)held / Timing::POWER_HOLD_OFF_MS);
+            lastBar = millis();
+        }
+        serviceCharging(millis());
+        delay(Timing::LOOP_INTERVAL_MS);
+    }
+}
+
+// Modal. atBoot: plugged in while off — returns when a button is pressed and
+// setup() carries on (splash, sensors, BLE). Otherwise entered from a timeout
+// on USB with the device on — returns to the reading screen. Either way,
+// unplugging or holding the power button powers off from here.
+static void runChargingScreen(bool atBoot, bool startDark) {
+    Serial.println(atBoot ? F("CHARGING SCREEN: plugged in while off") : F("CHARGING SCREEN: timeout on USB"));
+    if (!atBoot) {
+        if (menuMgr.isActive()) {
+            menuMgr.close();
+        }
+        if (ctx.currentState == SystemState::TAKING_MEASUREMENT) {
+            ctx.quickShot = false;
+            ctx.currentState = SystemState::IDLE;
+        }
+        laserOff();
+        Sounds::stopMelody();
+        ctx.discoOn = false;
+        disco.turnOff(); // leaves the charging colour
+        if (flashOk && configMgr.hasPendingToSync()) {
+            configMgr.syncPendingToFlash();
+        }
+        flash_nrf5x_flush();
+    }
+
+    bool dark = startDark || !dispOk;
+    if (dispOk) {
+        display.setSleep(dark);
+    }
+    chargeScreenPct = -1.0f; // start from a fresh reading, not one held from last time
+    readGaugeForChargingScreen();
+    if (!dark) {
+        playChargingIntro();
+    }
+    uint32_t lastDraw = 0;
+    uint32_t litSince = millis(); // the dim / off countdown runs from here
+    bool dimmed = false;
+    uint32_t unplugSince = 0;
+    uint32_t btnDownSince = 0;
+    bool buttonsArmed = false; // a press counts only once all four were seen up
+
+    for (;;) {
+        const uint32_t now = millis();
+        serviceCharging(now);
+        disco.tickBase();
+        pumpBleInMode(); // no-op before BLE is up (at boot)
+
+        // Cable out: power off (at boot the user never switched it on)
+        if (!Charger::usbPresent()) {
+            if (unplugSince == 0) {
+                unplugSince = now ? now : 1;
+            } else if (now - unplugSince >= 500) {
+                Serial.println(F("CHARGING SCREEN: unplugged - powering off"));
+                doShutdown();
+            }
+        } else {
+            unplugSince = 0;
+        }
+
+        // Power button: short press = screen on/off, hold = power off
+        if (powerButtonPressed(now)) {
+            chargingScreenPowerHold();
+            dark = !dark || !dispOk;
+            if (dispOk) {
+                display.setSleep(dark);
+            }
+            litSince = millis(); // relit: full brightness, countdown from the top
+            lastDraw = 0;
+        }
+
+        // The four buttons: relight a dark screen, otherwise leave
+        if (!anyButtonDownRaw()) {
+            buttonsArmed = true;
+            btnDownSince = 0;
+        } else if (buttonsArmed) {
+            if (btnDownSince == 0) {
+                btnDownSince = now ? now : 1;
+            } else if (now - btnDownSince >= 30) { // debounced press
+                buttonsArmed = false;
+                btnDownSince = 0;
+                if (!dark || !dispOk) {
+                    break;
+                }
+                dark = false;
+                display.setSleep(false);
+                litSince = now;
+                lastDraw = 0;
+            }
+        }
+
+        // OLED burn-in: full brightness for a minute, dim for another, then
+        // off; any button relights (the RGB LED shows the charge meanwhile)
+        if (dispOk && !dark) {
+            const uint32_t lit = now - litSince;
+            const bool wantDim = lit >= CHARGE_SCREEN_DIM_MS;
+            if (wantDim != dimmed) {
+                dimmed = wantDim;
+                const uint8_t level = ctx.config.screenBrightness;
+                display.setBrightness(dimmed && level > CHARGE_SCREEN_DIM_LEVEL ? CHARGE_SCREEN_DIM_LEVEL
+                                                                                 : level);
+            }
+            if (lit >= CHARGE_SCREEN_OFF_MS) {
+                Serial.println(F("CHARGING SCREEN: screen off (burn-in timeout)"));
+                dark = true;
+                display.setSleep(true);
+            }
+        }
+
+        if (dispOk && !dark && (lastDraw == 0 || now - lastDraw >= Timing::DISPLAY_REFRESH_MS)) {
+            lastDraw = now;
+            readGaugeForChargingScreen();
+            const uint32_t lit = now - litSince;
+            drawChargingScreen(lit < CHARGE_SCREEN_OFF_MS ? CHARGE_SCREEN_OFF_MS - lit : 0);
+        }
+        delay(Timing::LOOP_INTERVAL_MS);
+    }
+
+    // Wait for the release, so the press can't also act: MENU held at boot
+    // opens the menu, FIRE held waits for serial, and in normal mode FIRE
+    // would take a shot
+    while (anyButtonDownRaw()) {
+        serviceCharging(millis());
+        delay(Timing::LOOP_INTERVAL_MS);
+    }
+    Serial.println(F("CHARGING SCREEN: button - carrying on"));
+    if (dispOk) {
+        display.setBrightness(ctx.config.screenBrightness); // undo the burn-in dim
+        display.setSleep(false);
+    }
+    if (!atBoot) {
+        buttons.update();
+        drainButtonEdges();
+        ctx.displayFrozen = false;
+        lastDistance = 0;
+        lastDisplayRefresh = 0;
+        if (dispOk) {
+            display.updateSensorReadings(lastDistance, dispAz, dispInc);
+            display.initScreen();
+        }
+        ctx.lastActivityTime = millis();
+    }
+}
+
 // ── Battery check (every 30s) ───────────────────────────────────
 static void pollBattery(uint32_t now) {
     if (!batOk) {
@@ -2577,7 +3084,8 @@ static void pollBattery(uint32_t now) {
         display.updateBattery(lastBatPct);
     }
 
-    if (lastBatPct > 0.5f && lastBatPct <= Timing::BATTERY_SHUTDOWN_PCT) {
+    // Not on USB: it powers the device whatever the cell holds
+    if (!Charger::usbPresent() && lastBatPct > 0.5f && lastBatPct <= Timing::BATTERY_SHUTDOWN_PCT) {
         Serial.println(F("LOW BATTERY — shutting down"));
         if (dispOk) {
             display.updateDistanceText("LOW");
@@ -2600,6 +3108,11 @@ static void checkAutoShutoff(uint32_t now) {
 
     uint32_t inactiveSec = (now - ctx.lastActivityTime) / 1000;
     if (inactiveSec > ctx.config.autoShutdownTimeout) {
+        if (chargeScreenInsteadOfOff()) {
+            Serial.println(F("Inactivity timeout on USB — charging screen"));
+            runChargingScreen(false, false);
+            return;
+        }
         Serial.println(F("Inactivity timeout — shutting down"));
         doShutdown();
     }
@@ -2757,8 +3270,18 @@ static void doShutdown() {
     power.powerOff(); // KILL LOW — never returns (hangs if USB keeps us alive)
 }
 
-// Shared power-off hook (declared in config.h) for menu/snake timeout paths
-void systemPowerOff() { doShutdown(); }
+// Shared power-off hook (declared in config.h) for the menu's inactivity
+// timeout. On USB (new boards) the menu closes into the charging screen
+// instead, so the charge limit keeps holding.
+void systemPowerOff() {
+    if (chargeScreenInsteadOfOff()) {
+        Serial.println(F("Timeout on USB — charging screen"));
+        menuMgr.close();
+        runChargingScreen(false, false);
+        return;
+    }
+    doShutdown();
+}
 
 // Radio-quiet hook (declared in config.h) — calibration mode silences
 // advertising for its whole session so LittleFS commits can't collide with

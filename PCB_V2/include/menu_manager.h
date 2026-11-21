@@ -59,6 +59,7 @@ class MenuManager {
     FruityMenu _measureFromSub;
     FruityMenu _reformatSub;
     FruityMenu _cartesianSub;
+    FruityMenu _chargeSub;
 
     // Dynamic label buffers (updated in buildMenu)
     char _anomalyLabel[24];
@@ -67,6 +68,7 @@ class MenuManager {
     char _brightnessLabel[24];
     char _measureFromLabel[24];
     char _cartesianLabel[28];
+    char _chargeLabel[24];
 
     // State
     Adafruit_SH1107 *_display = nullptr;
@@ -102,5 +104,6 @@ class MenuManager {
     static void setMeasureFromFront(int);
     static void setMeasureFromBack(int);
     static void setCartesianTolerance(int value);
+    static void setChargeLimit(int value);
     static void exitMenu(int);
 };

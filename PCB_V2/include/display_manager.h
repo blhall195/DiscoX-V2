@@ -4,6 +4,13 @@
 #include <Adafruit_SH110X.h>
 #include <Arduino.h>
 
+/// How the battery icon is drawn (top-right, on the main and charging screens)
+enum class BatteryMode : uint8_t {
+    NORMAL,   // fill = charge level
+    CHARGING, // charged part solid, the rest filling up in steps
+    FULL,     // charge complete: solid at the level, no animation
+};
+
 class DisplayManager {
   public:
     /// Initialize the SH1107 display. Returns true on success.
@@ -33,6 +40,28 @@ class DisplayManager {
 
     /// Update battery bar (0-100%)
     void updateBattery(float percentage);
+
+    /// Charging animation on the battery icon (redrawn at each refresh)
+    void setBatteryMode(BatteryMode mode) { _batMode = mode; }
+    BatteryMode batteryMode() const { return _batMode; }
+
+    /// Charging screen: the battery icon where the main screen has it, the
+    /// gauge reading to 2 d.p. (or "--.--%" without a gauge), a status line,
+    /// a size-1 note between the icon and the % (charge limit / paused), and
+    /// up to CHARGING_HINTS size-1 lines at the bottom (nullptr = none).
+    /// Draws and pushes.
+    static constexpr uint8_t CHARGING_HINTS = 3;
+    void showChargingScreen(float pct, bool havePct, const char *status, const char *note,
+                            const char *const *hints);
+
+    /// Intro played as the charging screen opens: a bolt strikes, a big
+    /// battery pops in and fills to pct while the % counts up, then it
+    /// shrinks into the icon's corner and the status types in. Frame t (ms)
+    /// is drawn and pushed; from CHARGING_INTRO_MS on it is exactly
+    /// showChargingScreen() with the same arguments, so the hand-off is seamless.
+    static constexpr uint16_t CHARGING_INTRO_MS = 2200;
+    void showChargingIntro(uint32_t t, float pct, bool havePct, const char *status, const char *note,
+                           const char *const *hints);
 
     /// Show/hide BT label
     void updateBTLabel(bool connected);
@@ -101,6 +130,7 @@ class DisplayManager {
     float _azimuth = 0.0f;
     float _inclination = 0.0f;
     float _battery = 0.0f;
+    BatteryMode _batMode = BatteryMode::NORMAL;
     bool _btConnected = false;
     uint16_t _btPending = 0;
     bool _measureFromFront = false;
@@ -109,4 +139,11 @@ class DisplayManager {
     void drawErrorScreen();
     void drawBattery(float pct);
     void drawDegreeSymbol(int16_t y);
+    // Charging screen text; statusChars limits how much of the status is
+    // drawn (the intro types it in), hints only when showHints
+    void drawChargingText(float pct, bool havePct, const char *status, size_t statusChars,
+                          const char *note, const char *const *hints, bool showHints);
+    // Battery outline + fill at any size (the intro's big battery and its
+    // flight into the corner). wave = amplitude of the fill's wavy edge, px.
+    void drawBatteryAt(float x, float y, float w, float h, float frac, float wave, uint32_t t);
 };

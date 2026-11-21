@@ -27,15 +27,19 @@ Arduino pin numbers assume the pca10056 variant identity mapping
 | 34 | D-    | —  | D-      | USB (27R series) |
 | 35 | D+    | —  | D+      | USB (27R series) |
 | 36 | P0.14 | 14 | CSB     | SCA3300 chip select |
-| 37 | P0.13 | 13 | PGOOD   | BQ24074 power good (open drain — needs internal pullup) |
+| 37 | P0.13 | 13 | CHG     | **2026-10-18+ PCB only:** BQ24074 CHG, open drain, LOW = charging. Unconnected on the original V2 board (this row used to say PGOOD; the KiCad import shows it unconnected) |
 | 38 | P0.16 | 16 | MISO    | SCA3300 SPI |
+| 39 | P0.15 | 15 | PGOOD   | **2026-10-18+ PCB only:** BQ24074 PGOOD, open drain, LOW = USB good |
 | 40 | P0.18 | —  | (SW1)   | nRESET — reset button to GND |
 | 42 | P0.19 | 19 | MOSI    | SCA3300 SPI |
+| 41 | P0.17 | 17 | CHG_EN  | **2026-10-18+ PCB only:** BQ24074 CE, HIGH = charging off; R23 100k to GND |
 | 43 | P0.21 | 21 | SCK     | SCA3300 SPI |
 | 44 | P0.20 | 20 | BUZZ1   | Buzzer leg A (push-pull pair) |
 | 47 | P1.00 | 32 | RX      | Laser UART RX |
 | 48 | P0.24 | 24 | BUZZ2   | Buzzer leg B (push-pull pair) |
+| 46 | P0.22 | 22 | ALERT   | MAX17048 ALRT (unused by firmware) |
 | 49 | P0.25 | 25 | TX      | Laser UART TX |
+| 50 | P1.02 | 34 | (GND)   | **Board ID:** tied to GND on the 2026-10-18+ PCB, unconnected on the original |
 | 51 | SWDIO | —  | SWDIO   | SWD header H2 pin 5 |
 | 53 | SWDCLK| —  | SWDCLK  | SWD header H2 pin 4 |
 | 58 | P1.07 | 39 | BUTTON4 | Button, active LOW |
@@ -51,7 +55,7 @@ Arduino pin numbers assume the pca10056 variant identity mapping
 | U3  | MAX17048 battery gauge | I2C addr 0x36; senses BAT+_RAW |
 | CN2 | OLED connector (BM04B-SRSS) | I2C: SCL, SDA, OLEDPOWER, GND |
 | U5  | Laser JST connector | LZR_PWR_3V, RX, TX, buzzer-enable (U5_4 via 220R from ENA), GND |
-| U2  | BQ24074 LiPo charger | USB in, BAT+ out; PGOOD to MCU |
+| U2  | BQ24074 LiPo charger | USB in, BAT+ out. Original board: CHG drives a red LED, nothing to the MCU. 2026-10-18+ PCB: CHG/PGOOD/CE to the MCU (rows above), LEDs removed, USB auto-on (C30/Q3 pulse PWR_TOG at plug-in) |
 | U9  | LTC2954-1 pushbutton power controller | INT/KILL/ENA; PB on H3 pin 4 (PWR_TOG) |
 | LED1| WS2812B-MINI | DIN from P0.31; power gated by Q1/Q2 from ENA |
 | BUZZ| 4 kHz buzzer | BUZZ1/BUZZ2 across two GPIOs |

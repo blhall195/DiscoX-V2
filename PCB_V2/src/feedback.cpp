@@ -31,14 +31,15 @@ void legComplete(DiscoManager &disco, LaserManager &laser, bool wibble) {
 }
 
 void failed(DiscoManager &disco) {
-    disco.turnOff();
+    disco.blackout();
     for (int i = 0; i < 4; i++) {
         disco.setRed();
         delay(100);
-        disco.turnOff();
+        disco.blackout(); // dark gaps even over a charging colour
         delay(100);
     }
     Sounds::error();
+    disco.turnOff(); // back to the base colour (dark when not charging)
 }
 
 } // namespace Feedback

@@ -54,6 +54,10 @@ constexpr uint32_t autoShutdownTimeout = 1800;  // seconds (30 min)
 constexpr uint32_t laserTimeout = 120;          // seconds (2 min)
 constexpr uint32_t standbyTimeout = 600;        // seconds a power-button "off" stays in standby; 0 = off at once
 constexpr bool laserWibble = true;              // blink laser on leg detect
+// Charge limit, % (80, 90 or 100). Honoured only on boards that wire the
+// charger's CE pin to the MCU (2026-10-18 PCB revision) and only while the
+// firmware runs; 100 = the charger's own 4.2 V finish, today's behaviour.
+constexpr uint8_t chargeLimit = 100;
 // Laser shot validation (dark/specular targets return plausible-but-wrong
 // distances — see discox-sq-rejection-brief.md). A measurement is N low-speed
 // shots; a shot survives if its frame validates and its signal quality (SQ,

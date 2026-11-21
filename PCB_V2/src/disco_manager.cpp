@@ -4,6 +4,10 @@
 // ── Lifecycle ────────────────────────────────────────────────────────
 
 void DiscoManager::begin() {
+    if (begun_) {
+        return; // setup() starts it early for the charging screen
+    }
+    begun_ = true;
     pixel_.begin();
     pixel_.setBrightness(255); // HW brightness max; we software-scale
     pixel_.show();
@@ -81,7 +85,38 @@ void DiscoManager::update(float accelX, float accelY, float accelZ) {
             pixel_.show();
         }
     }
-    // STATIC and OFF need no per-frame work
+    tickBase(); // OFF: animate a pulsing base colour. STATIC needs nothing.
+}
+
+void DiscoManager::markStatic() {
+    staticSince_ = millis();
+    staticTimed_ = true;
+}
+
+void DiscoManager::tickBase() {
+    // While a charging colour is set, a shot colour (red/green/white) hands
+    // back to it after STATIC_HOLD_MS: left on until the next press, as it
+    // is on battery, a reading's green would read as "charged".
+    if (effect_ == DiscoEffect::STATIC && staticTimed_ && base_ != ChargePolicy::Led::NONE &&
+        millis() - staticSince_ >= STATIC_HOLD_MS) {
+        turnOff();
+        return;
+    }
+    if (effect_ != DiscoEffect::OFF || base_ != ChargePolicy::Led::ORANGE_PULSE) {
+        return;
+    }
+    // Charging paused: a slow breathe, so it can't be mistaken for the
+    // steady orange of a charge past 80%. Updates are few (every 60 ms)
+    // because the LED's data pin is on a radio-sensitive pad.
+    uint32_t now = millis();
+    if (now - lastBaseTime_ >= 60) {
+        lastBaseTime_ = now;
+        basePhase_ += 0.09f; // ~4 s per breath
+        if (basePhase_ > 6.2832f) {
+            basePhase_ -= 6.2832f;
+        }
+        showBase(0.15f + 0.85f * (0.5f + 0.5f * sinf(basePhase_)));
+    }
 }
 
 // ── Static colours ──────────────────────────────────────────────────
@@ -89,28 +124,79 @@ void DiscoManager::update(float accelX, float accelY, float accelZ) {
 void DiscoManager::setRed() {
     stopAll();
     effect_ = DiscoEffect::STATIC;
+    markStatic();
     setPixel(255, 0, 0);
 }
 
 void DiscoManager::setGreen() {
     stopAll();
     effect_ = DiscoEffect::STATIC;
+    markStatic();
     setPixel(0, 255, 0);
 }
 
 void DiscoManager::setBlue() {
     stopAll();
     effect_ = DiscoEffect::STATIC;
+    markStatic();
     setPixel(0, 0, 255);
 }
 
 void DiscoManager::setWhite() {
     stopAll();
     effect_ = DiscoEffect::STATIC;
+    markStatic();
     setPixel(255, 255, 255);
 }
 
-void DiscoManager::turnOff() { stopAll(); }
+void DiscoManager::turnOff() {
+    stopAll();
+    showBase();
+}
+
+void DiscoManager::blackout() {
+    stopAll();
+    effect_ = DiscoEffect::STATIC; // stay dark until turnOff() or another colour
+    pixel_.setPixelColor(0, 0);
+    pixel_.show();
+}
+
+// ── Base colour (charging indicator) ────────────────────────────────
+
+void DiscoManager::setBase(ChargePolicy::Led base) {
+    if (base == base_) {
+        return;
+    }
+    base_ = base;
+    basePhase_ = 0.0f;
+    lastBaseTime_ = millis();
+    if (effect_ == DiscoEffect::OFF) {
+        showBase(); // otherwise the running effect hands back to it later
+    }
+}
+
+void DiscoManager::showBase(float level) {
+    uint8_t r = 0, g = 0, b = 0;
+    switch (base_) {
+    case ChargePolicy::Led::RED:
+        r = 255;
+        break;
+    case ChargePolicy::Led::ORANGE:
+    case ChargePolicy::Led::ORANGE_PULSE:
+        r = 255;
+        g = 70;
+        break;
+    case ChargePolicy::Led::GREEN:
+        g = 255;
+        break;
+    case ChargePolicy::Led::NONE:
+    default:
+        break;
+    }
+    const float k = BASE_LEVEL * level;
+    pixel_.setPixelColor(0, pixel_.Color((uint8_t)(r * k), (uint8_t)(g * k), (uint8_t)(b * k)));
+    pixel_.show();
+}
 
 // ── Animated effects ────────────────────────────────────────────────
 
@@ -119,6 +205,7 @@ void DiscoManager::turnOn() {
         return; // already running
     }
     stopAll();
+    showBase(); // dark (or the base colour) until the first rainbow frame
     effect_ = DiscoEffect::DISCO;
     brightness_ = Disco::BASE_BRIGHTNESS;
     wildLatched_ = false;
@@ -160,6 +247,7 @@ void DiscoManager::clearMusicSync() {
 
 void DiscoManager::setPurple() {
     stopAll();
+    showBase(); // until the first pulse frame, 30 ms later
     effect_ = DiscoEffect::PURPLE_PULSE;
     pulsePhase_ = 0.0f;
     lastPulseTime_ = millis();
@@ -169,12 +257,13 @@ void DiscoManager::setPurple() {
 
 void DiscoManager::stopAll() {
     effect_ = DiscoEffect::OFF;
+    staticTimed_ = false;
     wildLatched_ = false;
     musicSync_ = false;
     noteBright_ = 0.0f;
     brightness_ = Disco::BASE_BRIGHTNESS;
-    pixel_.setPixelColor(0, 0);
-    pixel_.show();
+    // No pixel write: every caller draws what comes next (a colour,
+    // showBase(), or the effect's first frame)
 }
 
 void DiscoManager::setPixel(uint8_t r, uint8_t g, uint8_t b) {

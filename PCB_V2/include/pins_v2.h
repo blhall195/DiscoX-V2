@@ -44,7 +44,18 @@
 // ---
 #define PIN_KILL 4   // module pin 20, P0.04, net KILL  — drive LOW to power off
 #define PIN_PB_INT 6 // module pin 22, P0.06, net INT   — LOW on power-button press
-#define PIN_PGOOD 13 // module pin 37, P0.13, net PGOOD — charger power good (open drain)
+                     // (and, on 2026-10-18+ boards, ~0.2-1 s at every USB plug-in)
+
+// Charger status/control — wired only on the 2026-10-18 PCB revision (KiCad
+// commit af47f77). On older boards these pads are unconnected: the firmware
+// reads PIN_BOARD_ID once at boot and leaves the rest alone there.
+#define PIN_CHG 13      // module pin 37, P0.13, net CHG    — BQ24074 CHG, open drain, LOW = charging
+#define PIN_PGOOD 15    // module pin 39, P0.15, net PGOOD  — BQ24074 PGOOD, open drain, LOW = USB good
+#define PIN_CHG_EN 17   // module pin 41, P0.17, net CHG_EN — BQ24074 CE, HIGH = charging off
+                        //   (R23 100k to GND keeps charging on whenever the nRF isn't driving it)
+#define PIN_BOARD_ID 34 // module pin 50, P1.02 — tied to GND on new boards, unconnected on old;
+                        //   read with the pull-up once, then disconnect it (never an output)
+#define PIN_BAT_ALERT 22 // module pin 46, P0.22, net ALERT — MAX17048 ALRT (both boards; unused)
 
 // --- Buzzer (driven push-pull across two GPIOs) ---
 #define PIN_BUZZER_A 20 // module pin 44, P0.20, net BUZZ1

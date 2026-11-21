@@ -101,6 +101,10 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 | Menu | select | up | down | select |
 | Calibration | record point / F-B shot | finish the F/B check; on the results screen hold with DOWN to save | undo last point / cancel capture (screen hint "DOWN:undo"); on the results screen hold to discard, or hold with UP to save | inert while collecting points (edge consumed so it can't fire on menu re-entry); any-button advance on intro screens |
 | Snake | — | turn right | turn left | exit |
+| Charging screen | any of the four: relight a dark screen, else carry on (splash at boot) | ← | ← | ← |
+
+On the charging screen the power button toggles the screen (short) or
+powers off (hold); unplugging powers off.
 
 Power on/off = the dedicated hardware button into the LTC2954 (H3 pin 4,
 PWR_TOG). Holding it long enough hard-kills via the LTC2954 itself even if
@@ -364,6 +368,83 @@ sending, since USB power can keep the board up past KILL. Pass: the
 device is off (a short power press cold-boots with the splash) rather than
 frozen.
 
+## Charging (2026-11-21, built, not yet run on hardware)
+
+The 2026-10-18 PCB revision (KiCad repo `DiscoX-KiCad`, commits `af47f77`,
+`38d07ed`) removed the charge LEDs and wired the BQ24074 to the MCU: CHG →
+P0.13, PGOOD → P0.15, CE → P0.17 (R23 100k to GND: charging on unless the
+nRF drives CE high), P1.02 tied to GND as a board strap, and a USB auto-on
+circuit (USB → C30 470 nF → Q3 → PWR_TOG) that gives the LTC2954 a
+~0.2-1 s press at every plug-in. No existing MCU connection moved, so one
+build runs on both boards. `drivers/charger.*` reads the strap once
+(pull-up, then disconnected: left on it would draw ~250 uA into GND) and
+on an old board never touches the charger pins.
+
+- **Policy** (`charge_policy.*`, unit-tested): `charge_limit` (config.json,
+  80/90/100, default 100). 100 never touches CE: the charger runs to its
+  own 4.2 V finish, as before. 80/90 hold CE high once the gauge reaches
+  the limit or the cell 4.10 V, and resume 5 points below (and under
+  4.05 V). States: charging, paused (charger idle below the limit and not
+  by us: thermistor/safety timer), complete. Old boards: charging until
+  the gauge reads 99%, no hold. The limit only holds while firmware runs:
+  fully off, R23 turns charging on and it goes to 4.2 V. Menu → Settings
+  → Charge limit (hidden on old boards).
+- **`serviceCharging()`** runs at the top of `loop()` (every mode) and in
+  the long modal waits on USB (charging screen, firmware-update wait).
+  Gauge + decision every 2 s on USB, first one 1 s after plug-in (CHG
+  needs a moment). USB drive mode and the storage-repair screen don't run
+  it: CE stays at its default, so they charge normally (to 4.2 V at most).
+- **Plug-in pulse filter** (`powerButtonPressed()`): a press confirmed
+  within 300 ms of VBUS appearing is ignored, logged as `POWER: USB
+  plug-in pulse ignored (INT low N ms after VBUS)`. Without it, plugging
+  in a running device showed the hold bar then went to standby, and in
+  USB drive mode / storage repair it powered straight off. Check N on the
+  new hardware; the filter assumes |N| well under 300.
+- **Charging screen** (`runChargingScreen`): at boot when a new board
+  cold-powers on with USB present (RESETREAS clear: resets, DFU and
+  post-update reboots boot normally), and from normal mode when the
+  inactivity auto-off, the menu timeout or the standby timeout fires on USB.
+  Battery icon in the same place as on the main screen (so burn-in lands
+  on pixels lit anyway), gauge % to 2 d.p., Charging / Charged / Paused,
+  the limit (or "Too hot or cold?" when paused) between icon and %.
+  Burn-in: every time it lights it dims after 60 s (contrast 16) and goes
+  off after 2 min, with a "Screen off in m:ss" countdown and "Press button to
+  wake" on screen; the RGB LED carries the charge state meanwhile.
+  Any button relights a dark screen (full brightness, countdown restarts);
+  on a lit one it carries on to the readings. Whenever it opens lit, a ~2.2 s intro plays first
+  (`DisplayManager::showChargingIntro`, frames a pure function of t): a bolt
+  strikes, a big battery pops in and fills to the gauge level as the %
+  counts up, then shrinks into the icon's corner and the status types in.
+  Its last frame is the screen itself. A button or unplugging skips it.
+  Leaving the charging screen at boot goes straight to the readings (no
+  boot splash). The MAX17048 only moves its SOC about every 12 s (measured
+  2026-11-21 at ~50 %/h: 0.16 % steps every 11.8 s), so the shown % is read
+  at every 250 ms redraw and advanced between updates at the gauge's CRATE
+  (capped 15 s past the last update, never backwards;
+  `readGaugeForChargingScreen`). It runs before the splash, sensors and BLE, but after
+  `initLaser()`, whose cold-boot probe can take ~2.5 s, so the screen
+  appears a few seconds after plug-in. Known gap: powering on with the
+  button while already plugged in also lands here (indistinguishable from
+  a plug-in); one press gets past it.
+- **Power-off on USB** with a limit below 100 shows "Charging to 100% while
+  off" for 1.5 s first (the LTC2954 may kill the rail during it; storage is
+  already safe). The standby notice on USB says "Stays on to charge".
+- **Low-battery shutdown is skipped on USB** (both boards): the power path
+  runs the device from USB, and a flat cell woken by plug-in must not
+  switch straight back off.
+- **LED** (`DiscoManager::setBase`): red below 80%, orange from 80% until
+  complete, green complete, slow orange breathe when paused, dim
+  (`BASE_LEVEL`). `turnOff()` now shows the base colour; `blackout()` is the
+  real dark used for the gaps in the failed-shot flashes. While a base
+  colour is set, shot colours (red/green/white) hand back after 2 s
+  (`STATIC_HOLD_MS`) instead of staying until the next press, so a
+  reading's green can't pass for "charged". Disco and the purple pulse
+  still run until ended as before. With no base colour (on battery)
+  behaviour is unchanged.
+- **Main screen**: the battery icon fills in steps while charging
+  (`BatteryMode::CHARGING`), solid when complete.
+- `g` on serial prints the charge status (pins, gauge, limit, hold).
+
 ## Gotchas (inherited + new)
 
 - **LDJ-100 signal quality is inverted from its own manual.** The manual says
@@ -386,11 +467,12 @@ frozen.
   failure, so keep the floor above 15. Background: `discox-sq-rejection-brief.md`
   (note that brief repeats the manual's inverted claim).
 
-- **config.json holds user settings only** (2026-09-26). Eleven keys: `ble_name`,
+- **config.json holds user settings only** (2026-09-26). Twelve keys: `ble_name`,
   `screen_brightness`, `auto_shutdown_timeout`, `laser_timeout`,
   `measure_from_front`, `splays_enabled`, `laser_wibble`,
   `anomaly_detection`, `cartesian_tolerance`, `steady_tolerance`,
-  `standby_timeout` (seconds, default 600, 0 = no standby; 2026-10-03). Every
+  `standby_timeout` (seconds, default 600, 0 = no standby; 2026-10-03),
+  `charge_limit` (80/90/100, default 100; 2026-11-21). Every
   other `Config` field (EMA alphas, stability window, `cal_*`, anomaly
   thresholds, laser SQ/spread/shots, laser offset, leg angle tolerance) is a
   firmware constant from `Defaults::` — `loadConfig()` starts from
@@ -573,7 +655,7 @@ frozen.
    stream; `c` dumps the stored `/config.json`;
    `p` prints delivery status (undelivered count, in-flight flag, SAP6
    sent/acked/resend/failed-send counters) — the view for verifying the
-   reading drain on the bench.
+   reading drain on the bench; `g` prints charge status (see "Charging").
    Note the axes strings are ALSO stored inside saved calibrations
    (`/calibration.{bin,json}`); a mismatch is converted, not overwritten —
    see item 1. Boot serial prints `Mag axes:`/`Grav axes:` showing what is
@@ -663,6 +745,17 @@ frozen.
 6. ~~USB drive mode hardware test~~ **done 2026-07-10** — exercised on
    hardware as part of the full-device test pass (first run needed the
    re-enumeration fix now in `UsbDrive::beginMsc`).
+7. **Charging (2026-11-21) needs a run on both boards** — see "Charging".
+   New board: boot serial says `charger control`; plug in while off →
+   charging screen (note how long it takes to appear); plug in while on,
+   in normal mode, the menu and USB drive mode → nothing happens except
+   the icon and LED (serial logs the ignored pulse and its timing);
+   unplug from the charging screen → off; 80% and 90% stop where they
+   should (`g` shows `ce=HELD OFF`) and resume 5 points lower; a flat cell
+   plugged in stays on; after a UF2 update with USB attached it boots
+   normally, not to the charging screen (RESETREAS on the boot line).
+   Old board: boot serial says `no charger control`, no Charge limit
+   menu item, LED/icon follow the gauge, nothing else changes.
 
 ## Status
 

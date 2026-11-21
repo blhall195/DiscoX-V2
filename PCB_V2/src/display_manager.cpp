@@ -468,7 +468,290 @@ void DisplayManager::drawDegreeSymbol(int16_t y) {
     _display.drawCircle(cx, cy, DEG_RADIUS - 1, SH110X_WHITE);
 }
 
+void DisplayManager::showChargingScreen(float pct, bool havePct, const char *status, const char *note,
+                                        const char *const *hints) {
+    if (!_initialized) {
+        return;
+    }
+    _display.clearDisplay();
+    _display.setTextColor(SH110X_WHITE);
+    drawBattery(pct); // same place as on the main screen, so any wear is shared
+    drawChargingText(pct, havePct, status, SIZE_MAX, note, hints, true);
+    _display.display();
+}
+
+void DisplayManager::drawChargingText(float pct, bool havePct, const char *status, size_t statusChars,
+                                      const char *note, const char *const *hints, bool showHints) {
+    // Same rows as the distance / azimuth lines of the main screen
+    char text[12];
+    if (havePct) {
+        snprintf(text, sizeof(text), "%.2f%%", (double)pct);
+    } else {
+        strcpy(text, "--.--%");
+    }
+    _display.setTextSize(3);
+    _display.setCursor((SH1107_WIDTH - (int16_t)strlen(text) * 18) / 2, DIST_Y);
+    _display.print(text);
+
+    if (status && statusChars > 0) {
+        _display.setTextSize(2);
+        _display.setCursor((SH1107_WIDTH - (int16_t)strlen(status) * 12) / 2, AZ_Y + 2);
+        for (size_t i = 0; status[i] && i < statusChars; i++) {
+            _display.write(status[i]);
+        }
+    }
+
+    if (!showHints) {
+        return;
+    }
+    _display.setTextSize(1);
+    // Note: between the battery icon (rows 0-14) and the % (from row 34)
+    if (note) {
+        _display.setCursor((SH1107_WIDTH - (int16_t)strlen(note) * 6) / 2, 20);
+        _display.print(note);
+    }
+    // Hints: under the status (rows 70-85), at rows 92, 104, 116
+    for (uint8_t i = 0; hints && i < CHARGING_HINTS; i++) {
+        if (hints[i]) {
+            _display.setCursor((SH1107_WIDTH - (int16_t)strlen(hints[i]) * 6) / 2, 92 + i * 12);
+            _display.print(hints[i]);
+        }
+    }
+}
+
+// ── Charging intro ──────────────────────────────────────────────────
+// Timeline (ms). Each frame is a pure function of t, as for the boot splash,
+// so it runs at whatever rate the I2C refresh allows (~20 fps).
+static constexpr uint32_t CI_BOLT_END = 300;    // bolt grows from the top edge to the battery
+static constexpr uint32_t CI_FLASH_END = 370;   // whole panel white
+static constexpr uint32_t CI_RING_END = 750;    // shockwave from the strike
+static constexpr uint32_t CI_POP_START = 330;   // big battery scales up...
+static constexpr uint32_t CI_POP_END = 620;     // ...with a little overshoot
+static constexpr uint32_t CI_FILL_START = 620;  // fills to the real level, % counts up
+static constexpr uint32_t CI_FILL_END = 1450;
+static constexpr uint32_t CI_FLY_START = 1500;  // shrinks into the icon's corner
+static constexpr uint32_t CI_FLY_END = 1950;
+static constexpr uint32_t CI_TYPE_START = 1800; // status types in
+static constexpr uint32_t CI_TYPE_END = 2050;
+static constexpr uint32_t CI_HINTS = 2080;      // hints appear
+
+// Big battery, centred under the % row (its tip counts towards the width)
+static constexpr float CI_BIG_W = 64.0f;
+static constexpr float CI_BIG_H = 32.0f;
+static constexpr float CI_BIG_X = (SH1107_WIDTH - CI_BIG_W - 6.0f) / 2.0f;
+static constexpr float CI_BIG_Y = 70.0f;
+static constexpr int16_t CI_CX = (int16_t)(CI_BIG_X + CI_BIG_W / 2);
+static constexpr int16_t CI_CY = (int16_t)(CI_BIG_Y + CI_BIG_H / 2);
+
+static float ciClamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+static float ciPhase(uint32_t t, uint32_t a, uint32_t b) {
+    return ciClamp01((float)((int32_t)t - (int32_t)a) / (float)(b - a));
+}
+static float ciEaseOut(float v) {
+    const float u = 1.0f - v;
+    return 1.0f - u * u * u;
+}
+static float ciEaseInOut(float v) {
+    if (v < 0.5f) {
+        return 4.0f * v * v * v;
+    }
+    const float u = -2.0f * v + 2.0f;
+    return 1.0f - u * u * u / 2.0f;
+}
+static float ciEaseOutBack(float v) {
+    const float c1 = 1.70158f, c3 = c1 + 1.0f;
+    const float u = v - 1.0f;
+    return 1.0f + c3 * u * u * u + c1 * u * u;
+}
+static float ciLerp(float a, float b, float k) { return a + (b - a) * k; }
+static uint32_t ciHash(uint32_t a, uint32_t b) {
+    uint32_t h = a * 374761393u + b * 668265263u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return h ^ (h >> 16);
+}
+
+void DisplayManager::drawBatteryAt(float x, float y, float w, float h, float frac, float wave, uint32_t t) {
+    const int16_t bx = (int16_t)lroundf(x), by = (int16_t)lroundf(y);
+    const int16_t bw = (int16_t)lroundf(w), bh = (int16_t)lroundf(h);
+    if (bw < 4 || bh < 4) {
+        return;
+    }
+    const bool big = bw > 44; // thick walls and a gap round the fill when big
+    _display.drawRect(bx, by, bw, bh, SH110X_WHITE);
+    if (big) {
+        _display.drawRect(bx + 1, by + 1, bw - 2, bh - 2, SH110X_WHITE);
+    }
+    // Tip in the main icon's proportions (3x6 on 32x15)
+    const int16_t tipW = (int16_t)lroundf(w * 3.0f / 32.0f);
+    const int16_t tipH = (int16_t)lroundf(h * 6.0f / 15.0f);
+    _display.fillRect(bx + bw, by + (bh - tipH) / 2, tipW < 1 ? 1 : tipW, tipH, SH110X_WHITE);
+
+    const int16_t inset = big ? 4 : 1;
+    const int16_t fx = bx + inset, fy = by + inset;
+    const int16_t fw = bw - 2 * inset, fh = bh - 2 * inset;
+    const float level = ciClamp01(frac) * (float)fw;
+    if (fw <= 0 || fh <= 0 || level <= 0.0f) {
+        return;
+    }
+    for (int16_t r = 0; r < fh; r++) {
+        const float edge = level + wave * sinf((float)r * 0.55f + (float)t * 0.018f);
+        int16_t len = (int16_t)lroundf(edge);
+        if (len > fw) {
+            len = fw;
+        }
+        if (len > 0) {
+            _display.drawFastHLine(fx, fy + r, len, SH110X_WHITE);
+        }
+    }
+}
+
+// The charge symbol: top slab slanting down-left, a jog right, bottom slab.
+// One span per row, drawn INVERSE so it reads both on the fill and off it.
+static void ciChargeSymbol(Adafruit_SH1107 &d, int16_t cx, int16_t cy) {
+    for (int16_t y = -11; y <= 11; y++) {
+        int16_t left;
+        int16_t w = 5;
+        if (y < 0) {
+            left = cx + 1 - (y + 11) / 2;
+        } else if (y < 2) {
+            left = cx - 5;
+            w = 11;
+        } else {
+            left = cx + 1 - (y - 2) / 2;
+        }
+        d.drawFastHLine(left, cy + y, w, SH110X_INVERSE);
+    }
+}
+
+void DisplayManager::showChargingIntro(uint32_t t, float pct, bool havePct, const char *status,
+                                       const char *note, const char *const *hints) {
+    if (!_initialized) {
+        return;
+    }
+    if (t >= CHARGING_INTRO_MS) {
+        showChargingScreen(pct, havePct, status, note, hints);
+        return;
+    }
+    _display.clearDisplay();
+    _display.setTextColor(SH110X_WHITE);
+    const float frac = havePct ? pct / 100.0f : 0.0f;
+
+    // Flash: the strike lights the whole panel for a frame or two
+    if (t >= CI_BOLT_END && t < CI_FLASH_END) {
+        _display.fillScreen(SH110X_WHITE);
+        _display.display();
+        return;
+    }
+
+    // Lightning bolt from above the top edge down onto the battery
+    if (t < CI_BOLT_END) {
+        static const int16_t kBolt[][2] = {{74, -4}, {56, 22}, {72, 28}, {52, 52}, {68, 56}, {CI_CX, CI_CY - 2}};
+        constexpr uint8_t kN = sizeof(kBolt) / sizeof(kBolt[0]);
+        float total = 0.0f;
+        for (uint8_t i = 1; i < kN; i++) {
+            total += hypotf((float)(kBolt[i][0] - kBolt[i - 1][0]), (float)(kBolt[i][1] - kBolt[i - 1][1]));
+        }
+        float remain = total * ciEaseOut(ciPhase(t, 0, CI_BOLT_END));
+        for (uint8_t i = 1; i < kN && remain > 0.0f; i++) {
+            const float x0 = kBolt[i - 1][0], y0 = kBolt[i - 1][1];
+            const float dx = kBolt[i][0] - x0, dy = kBolt[i][1] - y0;
+            const float len = hypotf(dx, dy);
+            const float k = remain >= len ? 1.0f : remain / len;
+            remain -= len;
+            const int16_t x1 = (int16_t)lroundf(x0 + dx * k), y1 = (int16_t)lroundf(y0 + dy * k);
+            for (int16_t o = -1; o <= 1; o++) {
+                _display.drawLine((int16_t)x0 + o, (int16_t)y0, x1 + o, y1, SH110X_WHITE);
+            }
+        }
+    }
+
+    // Shockwave from the strike
+    if (t >= CI_FLASH_END && t < CI_RING_END) {
+        const float k = ciEaseOut(ciPhase(t, CI_FLASH_END, CI_RING_END));
+        const int16_t r = (int16_t)lroundf(8.0f + 70.0f * k);
+        _display.drawCircle(CI_CX, CI_CY, r, SH110X_WHITE);
+        if (k < 0.6f) {
+            _display.drawCircle(CI_CX, CI_CY, r - 3, SH110X_WHITE);
+        }
+    }
+
+    // The % counts up with the fill; the status types in as the battery lands.
+    // Drawn before the battery so the battery passes in front on its way up.
+    if (t >= CI_FILL_START) {
+        const float shown = havePct ? pct * ciEaseOut(ciPhase(t, CI_FILL_START, CI_FILL_END)) : 0.0f;
+        size_t chars = 0;
+        if (status && t >= CI_TYPE_START) {
+            const size_t len = strlen(status);
+            chars = (size_t)(ciPhase(t, CI_TYPE_START, CI_TYPE_END) * (float)len + 0.999f);
+        }
+        drawChargingText(shown, havePct, status, chars, note, hints, t >= CI_HINTS);
+    }
+
+    // The battery: pops in, fills, then flies into the corner
+    if (t >= CI_POP_START) {
+        float x, y, w, h, wave = 0.0f;
+        const float level = frac * ciEaseOut(ciPhase(t, CI_FILL_START, CI_FILL_END));
+        if (t < CI_FLY_START) {
+            const float s = ciEaseOutBack(ciPhase(t, CI_POP_START, CI_POP_END));
+            w = CI_BIG_W * s;
+            h = CI_BIG_H * s;
+            x = CI_CX - w / 2.0f;
+            y = CI_CY - h / 2.0f;
+            if (t >= CI_FILL_START) {
+                wave = 2.0f;
+            }
+        } else {
+            const float k = ciEaseInOut(ciPhase(t, CI_FLY_START, CI_FLY_END));
+            x = ciLerp(CI_BIG_X, BAT_X, k);
+            y = ciLerp(CI_BIG_Y, BAT_Y, k);
+            w = ciLerp(CI_BIG_W, BAT_W, k);
+            h = ciLerp(CI_BIG_H, BAT_H, k);
+            wave = 2.0f * (1.0f - k);
+        }
+        if (t >= CI_FLY_END) {
+            drawBattery(pct); // the real icon, already where it stays
+        } else {
+            if (t >= CI_FLY_START) { // opaque, so it slides over the % row cleanly
+                _display.fillRect((int16_t)x - 2, (int16_t)y - 2, (int16_t)(w * 35.0f / 32.0f) + 5,
+                                  (int16_t)h + 5, SH110X_BLACK);
+            }
+            drawBatteryAt(x, y, w, h, level, wave, t);
+        }
+
+        if (t >= CI_FILL_START && t < CI_FLY_START) {
+            // Sparks spraying off the advancing fill edge, kept inside
+            const int16_t fx = (int16_t)lroundf(x) + 4, fy = (int16_t)lroundf(y) + 4;
+            const int16_t fw = (int16_t)lroundf(w) - 8, fh = (int16_t)lroundf(h) - 8;
+            const float front = fx + level * fw;
+            if (t < CI_FILL_END && fh > 0) {
+                for (uint32_t i = 0; i < 7; i++) {
+                    const uint32_t cyc = (t + i * 61) / 220;
+                    const float age = (float)((t + i * 61) % 220) / 220.0f;
+                    const uint32_t hsh = ciHash(i, cyc);
+                    const float vx = 4.0f + (float)(hsh % 9);
+                    const float vy = (float)((int32_t)((hsh >> 8) % 13) - 6);
+                    const float sy = fy + (float)((hsh >> 16) % (uint32_t)fh);
+                    const int16_t px = (int16_t)lroundf(front + vx * age);
+                    const int16_t py = (int16_t)lroundf(sy + vy * age);
+                    if (px >= fx && px < fx + fw - 1 && py >= fy && py < fy + fh) {
+                        _display.fillRect(px, py, 2, 1, SH110X_INVERSE);
+                    }
+                }
+            }
+            ciChargeSymbol(_display, CI_CX, CI_CY);
+        }
+    }
+    _display.display();
+}
+
 void DisplayManager::drawBattery(float pct) {
+    // Charging: the charged part stays solid and the rest fills up in five
+    // steps, one per 250 ms refresh (~1.25 s a sweep), then starts again.
+    if (_batMode == BatteryMode::CHARGING && pct < 99.5f) {
+        const uint32_t frame = (millis() / 250) % 5; // 0 = the real level, 4 = full
+        pct += (100.0f - pct) * (float)frame / 4.0f;
+    }
+
     // Outline
     _display.drawRect(BAT_X, BAT_Y, BAT_W, BAT_H, SH110X_WHITE);
 

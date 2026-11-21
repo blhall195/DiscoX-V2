@@ -3,6 +3,7 @@
 // Session 9: static colors, disco rainbow (with gyro-driven wild mode), purple
 // pulse.
 
+#include "charge_policy.h"
 #include "config.h"
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
@@ -28,7 +29,20 @@ class DiscoManager {
     void setGreen();
     void setBlue();
     void setWhite();
+    /// End any effect. Shows the base colour if one is set, else dark.
     void turnOff();
+    /// Dark now, even over a base colour (the gaps in a flash sequence).
+    /// turnOff() brings the base colour back.
+    void blackout();
+
+    // ── Base colour (charging indicator) ────────────────────────────
+    /// What the LED shows whenever no effect is running. Shot flashes,
+    /// disco and the purple pulse take over and hand back to it. NONE =
+    /// dark, as before charging existed.
+    void setBase(ChargePolicy::Led base);
+    /// Animate a pulsing base colour. update() calls it; loops that don't
+    /// run update() (menu, standby, charging screen) call it directly.
+    void tickBase();
 
     // ── Animated effects ────────────────────────────────────────────
     void turnOn();
@@ -55,6 +69,7 @@ class DiscoManager {
     // LED rail is hardware-gated by ENA.
     Adafruit_NeoPixel pixel_{NEOPIXEL_COUNT, PIN_NEOPIXEL_DIN, NEO_GRB + NEO_KHZ800};
     DiscoEffect effect_ = DiscoEffect::OFF;
+    bool begun_ = false;
 
     // ── Brightness ──────────────────────────────────────────────────
     float brightness_ = Disco::BASE_BRIGHTNESS;
@@ -84,9 +99,25 @@ class DiscoManager {
     float pulsePhase_ = 0.0f;
     uint32_t lastPulseTime_ = 0;
 
+    // ── Base colour state ───────────────────────────────────────────
+    ChargePolicy::Led base_ = ChargePolicy::Led::NONE;
+    float basePhase_ = 0.0f;
+    uint32_t lastBaseTime_ = 0;
+    // Dim: it sits on for hours on a desk. Pulse is the "paused" signal.
+    static constexpr float BASE_LEVEL = 0.12f;
+    // Shot colours give way to a charging colour after this long
+    static constexpr uint32_t STATIC_HOLD_MS = 2000;
+    uint32_t staticSince_ = 0;
+    bool staticTimed_ = false; // a shot colour (not a blackout gap) is showing
+
     // ── Helpers ─────────────────────────────────────────────────────
     void setPixel(uint8_t r, uint8_t g, uint8_t b);
+    /// Reset effect state (effect_ = OFF). Does not write the pixel.
     void stopAll();
+    /// A shot colour just went up: start its hand-back timer
+    void markStatic();
+    /// Draw the base colour (or dark) at the given 0..1 level
+    void showBase(float level = 1.0f);
 
     /// HSV → RGB (h 0.0-1.0, s 0.0-1.0, v 0.0-1.0) → 0-255 per channel
     static void hsvToRgb(float h, float s, float v, uint8_t &r, uint8_t &g, uint8_t &b);

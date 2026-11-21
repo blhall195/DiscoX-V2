@@ -1,4 +1,5 @@
 #include "config_manager.h"
+#include "charge_policy.h"
 #include "config.h"
 #include "mag_cal/calibration.h"
 #include "usb_drive.h"
@@ -175,7 +176,7 @@ bool ConfigManager::loadConfig(Config &cfg) {
     static const char *const kUserKeys[] = {
         "ble_name",         "screen_brightness", "auto_shutdown_timeout", "laser_timeout",
         "measure_from_front", "splays_enabled",  "laser_wibble",          "anomaly_detection",
-        "cartesian_tolerance", "steady_tolerance", "standby_timeout"};
+        "cartesian_tolerance", "steady_tolerance", "standby_timeout", "charge_limit"};
     static const char *const kRetiredKeys[] = {
         "mag_tolerance", "grav_tolerance", "dip_tolerance", "stability_tolerance",
         "stability_buffer_length", "ema_alpha_stable", "ema_alpha_moving", "filter_tuning",
@@ -199,6 +200,7 @@ bool ConfigManager::loadConfig(Config &cfg) {
     if (cfg.standbyTimeout > 86400) { // 24 h cap keeps the standby timer maths in range
         cfg.standbyTimeout = 86400;
     }
+    cfg.chargeLimit = ChargePolicy::sanitiseLimit(doc["charge_limit"] | (int)Defaults::chargeLimit);
     cfg.measureFromFront = doc["measure_from_front"] | Defaults::measureFromFront;
     cfg.splaysEnabled = doc["splays_enabled"] | Defaults::splaysEnabled;
     cfg.laserWibble = doc["laser_wibble"] | Defaults::laserWibble;
@@ -235,6 +237,7 @@ bool ConfigManager::saveConfig(const Config &cfg) {
     doc["auto_shutdown_timeout"] = cfg.autoShutdownTimeout;
     doc["laser_timeout"] = cfg.laserTimeout;
     doc["standby_timeout"] = cfg.standbyTimeout;
+    doc["charge_limit"] = (int)cfg.chargeLimit;
     doc["measure_from_front"] = cfg.measureFromFront;
     doc["splays_enabled"] = cfg.splaysEnabled;
     doc["laser_wibble"] = cfg.laserWibble;

@@ -109,6 +109,8 @@ void MenuManager::buildMenu() {
 
     snprintf(_cartesianLabel, sizeof(_cartesianLabel), "Leg tol: %dcm", (int)_ctx->config.cartesianTolerance);
 
+    snprintf(_chargeLabel, sizeof(_chargeLabel), "Charge limit: %u%%", (unsigned)_ctx->config.chargeLimit);
+
     snprintf(_measureFromLabel, sizeof(_measureFromLabel), "Measure from: %s",
              _ctx->config.measureFromFront ? "Front" : "Back");
 
@@ -125,6 +127,7 @@ void MenuManager::buildMenu() {
     _measureFromSub.init(*_display, _measureFromLabel);
     _reformatSub.init(*_display, "Reformat Storage");
     _cartesianSub.init(*_display, _cartesianLabel);
+    _chargeSub.init(*_display, _chargeLabel);
 
     // ── Root menu items ────────────────────────────────
     _root.addAction("Exit", exitMenu);
@@ -201,6 +204,9 @@ void MenuManager::buildMenu() {
     _settingsSub.addSubmenu(_shutdownLabel, &_shutdownSub);
     _settingsSub.addSubmenu(_brightnessLabel, &_brightnessSub);
     _settingsSub.addSubmenu(_cartesianLabel, &_cartesianSub);
+    if (_ctx->chargeControl) { // older boards can't stop the charger
+        _settingsSub.addSubmenu(_chargeLabel, &_chargeSub);
+    }
     _settingsSub.addAction("USB Drive Mode", enterUsbDrive);
     // (V2: no "Edit Settings File" — there is no USB drive on internal flash)
     _settingsSub.addSubmenu("Reformat Storage", &_reformatSub);
@@ -219,6 +225,13 @@ void MenuManager::buildMenu() {
     _cartesianSub.addAction("25 cm", setCartesianTolerance, 25);
     _cartesianSub.addAction("30 cm", setCartesianTolerance, 30);
     _cartesianSub.addAction("<- Back", goToSettings);
+
+    // ── Charge limit submenu (boards with charger control only) ─────
+    // Holds only while the device is on; switched off it charges to 100%.
+    _chargeSub.addAction("80% (kindest)", setChargeLimit, 80);
+    _chargeSub.addAction("90%", setChargeLimit, 90);
+    _chargeSub.addAction("100% (full)", setChargeLimit, 100);
+    _chargeSub.addAction("<- Back", goToSettings);
 
     // ── Reformat submenu (recovery — formats internal LittleFS) ──
     _reformatSub.addAction("No", goToSettings);
@@ -309,6 +322,17 @@ void MenuManager::setAutoShutdown(int value) {
     s_instance->_ctx->config.autoShutdownTimeout = (uint32_t)value;
     s_instance->_cfgMgr->saveConfig(s_instance->_ctx->config);
     Serial.print(F("Menu: auto shutdown = "));
+    Serial.println(value);
+    s_instance->buildMenu();
+}
+
+void MenuManager::setChargeLimit(int value) {
+    if (!s_instance) {
+        return;
+    }
+    s_instance->_ctx->config.chargeLimit = (uint8_t)value;
+    s_instance->_cfgMgr->saveConfig(s_instance->_ctx->config);
+    Serial.print(F("Menu: charge limit = "));
     Serial.println(value);
     s_instance->buildMenu();
 }

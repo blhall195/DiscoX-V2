@@ -1,9 +1,8 @@
 #include "power.h"
 
-void PowerControl::begin(uint8_t killPin, uint8_t intPin, int8_t pgoodPin) {
+void PowerControl::begin(uint8_t killPin, uint8_t intPin) {
     killPin_ = killPin;
     intPin_ = intPin;
-    pgoodPin_ = pgoodPin;
 
     // Keep KILL high-impedance: the external 10k pullup holds it HIGH so the
     // rail stays latched on. We only ever drive it LOW inside powerOff().
@@ -11,19 +10,9 @@ void PowerControl::begin(uint8_t killPin, uint8_t intPin, int8_t pgoodPin) {
 
     // INT has an external 10k pullup; the internal one is harmless insurance.
     pinMode(intPin_, INPUT_PULLUP);
-    if (pgoodPin_ >= 0) {
-        pinMode(pgoodPin_, INPUT_PULLUP); // open-drain output on the charger
-    }
 }
 
 bool PowerControl::buttonPressed() const { return digitalRead(intPin_) == LOW; }
-
-bool PowerControl::powerGood() const {
-    if (pgoodPin_ < 0) {
-        return false;
-    }
-    return digitalRead(pgoodPin_) == LOW; // open-drain: LOW = input power good
-}
 
 void PowerControl::powerOff() {
     // Switch KILL from high-Z to a hard driven LOW.

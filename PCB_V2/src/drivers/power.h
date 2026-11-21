@@ -2,7 +2,8 @@
 
 #include <Arduino.h>
 
-// LTC2954-1 pushbutton power controller (U9) + BQ24074 charger PGOOD.
+// LTC2954-1 pushbutton power controller (U9). (The BQ24074's PGOOD/CHG live
+// in drivers/charger.h.)
 //
 // The device is powered ON by hardware: pressing the button latches the
 // LTC2954's ENA high, enabling every downstream 3V3 rail (the nRF core
@@ -18,14 +19,10 @@
 // LOW can never cut power mid-run.
 class PowerControl {
   public:
-    void begin(uint8_t killPin, uint8_t intPin, int8_t pgoodPin = -1);
+    void begin(uint8_t killPin, uint8_t intPin);
 
     // True while the power button is held (INT asserted LOW).
     bool buttonPressed() const;
-
-    // BQ24074 power-good: valid USB input present. Only meaningful if a PGOOD
-    // pin was supplied to begin(). Open-drain, active LOW.
-    bool powerGood() const;
 
     // Assert KILL LOW -> LTC2954 drops ENA -> all rails die. Does not return:
     // if power somehow lingers (e.g. USB still feeding the nRF's USB PHY) it
@@ -35,5 +32,4 @@ class PowerControl {
   private:
     uint8_t killPin_ = 0xFF;
     uint8_t intPin_ = 0xFF;
-    int8_t pgoodPin_ = -1;
 };
