@@ -89,8 +89,9 @@ constexpr bool measureFromFront = false;        // false = Back (add offset), tr
 constexpr bool splaysEnabled = true;
 constexpr uint8_t screenBrightness = 255;       // OLED contrast 0-255
 // Boot animation (Splash::Style). Not a user setting: picked per firmware
-// release, so updating brings a new one. 2 = Mirror Ball (v2.0.7-v2.0.10).
-constexpr uint8_t splashStyle = 2;
+// release, so updating brings a new one. 2 = Mirror Ball (v2.0.7-v2.0.10),
+// 5 = Cave Flight (v2.0.11).
+constexpr uint8_t splashStyle = 5;
 constexpr char bleName[] = "SAP6_DiscoX";
 constexpr uint8_t bleNameMaxLen = 20; // max chars for BLE name
 } // namespace Defaults
