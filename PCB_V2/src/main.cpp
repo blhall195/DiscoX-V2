@@ -5,6 +5,7 @@
 #include "config_manager.h"
 #include "defaults.h"
 #include "device_context.h"
+#include "device_number.h"
 #include "disco_manager.h"
 #include "display_manager.h"
 #include "drivers/buzzer.h"
@@ -504,7 +505,11 @@ void setup() {
     Serial.println(F("=== Mr_Zappy PCB V2 ==="));
     Serial.println(F("Merged single-MCU firmware"));
     Serial.print(F("Firmware "));
-    Serial.println(FIRMWARE_VERSION); // same string the splash shows
+    {
+        char label[24]; // same string the splash shows: version + unit number
+        DeviceNumber::versionLabel(label, sizeof(label));
+        Serial.println(label);
+    }
     Serial.print(F("BOOTHOLD: "));
     if (bootHoldResult == BootHold::HELD) {
         Serial.print(F("held, INT low after "));
@@ -1460,6 +1465,38 @@ static void handleBuzzerTestLine(char *line) {
         Sounds::stopMelody();
         buzzer.off();
         Serial.println(F("OK"));
+    } else if (strcasecmp(cmd, "DEVNUM") == 0) {
+        // Not a buzzer command, but it shares the buffered '>' console.
+        // `>DEVNUM` reports the unit's number, `>DEVNUM 49` sets it (see
+        // device_number.h) and reboots.
+        char *numTok = strtok_r(nullptr, " ", &save);
+        if (!numTok) {
+            Serial.print(F("OK device #"));
+            Serial.print(DeviceNumber::get());
+            Serial.print(F(" (0 = not set), changes left: "));
+            Serial.println(DeviceNumber::slotsLeft());
+            return;
+        }
+        long n = atol(numTok);
+        if (n < 1 || n > DeviceNumber::MAX) {
+            Serial.println(F("ERR usage: DEVNUM <1-9999>"));
+        } else if (n == DeviceNumber::get()) {
+            Serial.println(F("OK already set"));
+        } else if (DeviceNumber::slotsLeft() == 0) {
+            Serial.println(F("ERR no changes left"));
+        } else {
+            Serial.print(F("OK device #"));
+            Serial.print(n);
+            Serial.println(F(", rebooting"));
+            // Same storage-safe shutdown as the 'u' reflash command.
+            if (flashOk && configMgr.hasPendingToSync()) {
+                configMgr.syncPendingToFlash();
+            }
+            flash_nrf5x_flush();
+            Serial.flush();
+            delay(100);
+            DeviceNumber::setAndReboot((uint16_t)n);
+        }
     } else {
         Serial.println(F("ERR unknown command"));
     }

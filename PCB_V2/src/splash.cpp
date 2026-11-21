@@ -1,5 +1,6 @@
 #include "splash.h"
 
+#include "device_number.h"
 #include "version.h"
 #include <math.h>
 #include <string.h>
@@ -616,6 +617,8 @@ void play(Adafruit_SH1107 &display, uint8_t style, const char *nameSuffix) {
     }
     const uint32_t dur = durationMs(style);
     const uint32_t start = millis();
+    char version[24]; // version, plus the unit's number if it has one
+    DeviceNumber::versionLabel(version, sizeof(version));
     // No frame pacing needed: display() is a ~2 KB I2C transfer that takes
     // ~45 ms at 400 kHz, which sets the rate. The last pass draws t = dur
     // exactly, so the final frame is always the one left on screen.
@@ -623,7 +626,7 @@ void play(Adafruit_SH1107 &display, uint8_t style, const char *nameSuffix) {
         uint32_t t = millis() - start;
         bool last = t >= dur;
         display.clearDisplay();
-        draw(display, style, last ? dur : t, nameSuffix, FIRMWARE_VERSION);
+        draw(display, style, last ? dur : t, nameSuffix, version);
         display.display();
         if (last) {
             break;

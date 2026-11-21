@@ -587,6 +587,18 @@ frozen.
    Kept behind the `>` prefix so it can't collide with the single-char `r`/
    `s`/`c`/`p` commands above. Each command replies `OK`/`ERR ...` on
    `Serial`.
+   **Device number** (2026-11-15, `src/device_number.cpp`): each unit's
+   build number, shown on the splash after the version (`v2.0.10 #49`) and
+   on the boot serial line, so a customer's device can be identified. Set
+   with `>DEVNUM 49` on the same `>` console (normal mode; the device
+   reboots); `>DEVNUM` alone reads it back. It lives in UICR `CUSTOMER[0..7]`
+   (tag `0x444E` + number), so firmware updates, storage reformats and the
+   factory reset leave it alone; only an SWD chip erase clears it. Flash
+   bits can't be set again, so each change takes the next slot and the
+   newest wins: a unit can be renumbered 7 times. The SoftDevice refuses
+   flash writes outside the app area, so the write stops the SoftDevice,
+   writes through NVMC and resets. A unit with no number shows the version
+   alone.
 2. OLED electrically verified on hardware 2026-07-07 (I2C ACK + `begin()`,
    pattern cycle running) — this exposed that the V2 panel is at **0x3C**,
    not V1's 0x3D, so `SH1107_ADDR` (config.h) was corrected. Image since
