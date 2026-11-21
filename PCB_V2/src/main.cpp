@@ -121,6 +121,19 @@ bool flashOk = false;
 // damaged unit, 2026-09-25 — it just looped back to the prompt).
 static constexpr uint8_t STORAGE_FAULT_MARK = 0xA7;
 
+// ── Warm vs cold boot ───────────────────────────────────────────────
+// RESETREAS can't tell a cold power-on from a reboot through the UF2
+// bootloader: the bootloader reads and clears it, so the app sees 0 after a
+// drag-and-drop update exactly as after a power-on (v2.0.11: a new board
+// updated by UF2 on USB woke on the charging screen, found 2026-11-21).
+// GPREGRET2 can: it survives every reset and the bootloader, and only a real
+// loss of power (POR/brown-out) clears it. setup() writes APP_RAN_MARK at
+// the start of every boot, so finding it (or the storage-fault mark) means
+// the rail never went down and this is a reboot, not a power-on.
+static constexpr uint8_t APP_RAN_MARK = 0x5C;
+static uint8_t bootGpregret2 = 0; // GPREGRET2 as setup() found it
+static bool warmBoot() { return bootGpregret2 == APP_RAN_MARK || bootGpregret2 == STORAGE_FAULT_MARK; }
+
 // ── Standby (power button in normal mode / menu) ────────────────────
 // A press puts the device in standby — laser, screen and LEDs off, BLE link
 // kept — so the next press is back on the reading screen instantly instead
@@ -182,13 +195,9 @@ static void setStorageFaultMark() {
     }
 }
 
-// Read-and-clear. Only called early in setup(), before Bluefruit enables
-// the SoftDevice, so the register is ours to touch directly.
-static bool takeStorageFaultMark() {
-    bool marked = (NRF_POWER->GPREGRET2 == STORAGE_FAULT_MARK);
-    NRF_POWER->GPREGRET2 = 0;
-    return marked;
-}
+// From the value setup() captured: the register itself already holds
+// APP_RAN_MARK by now, which also clears the fault mark for the next boot.
+static bool takeStorageFaultMark() { return bootGpregret2 == STORAGE_FAULT_MARK; }
 
 // Busy-wait: an assert may fire with the scheduler in any state, so
 // delay() (which yields to FreeRTOS) is off limits in the handler.
@@ -447,6 +456,10 @@ void laserOff() {
 // ═══════════════════════════════════════════════════════════════════
 void setup() {
     bootResetReas = NRF_POWER->RESETREAS; // before anything can disturb it
+    // Warm/cold boot marker (see APP_RAN_MARK). SoftDevice not up yet, so
+    // the POWER register is ours to write directly.
+    bootGpregret2 = NRF_POWER->GPREGRET2;
+    NRF_POWER->GPREGRET2 = APP_RAN_MARK;
 
     // Power controller first: KILL stays high-Z so nothing can cut the rail,
     // INT becomes an input. (The power-on button press is still in flight —
@@ -562,6 +575,7 @@ void setup() {
     Serial.println(charger.hasControl() ? F("charger control (2026-10-18+ PCB)") : F("no charger control (older PCB)"));
     Serial.print(F("Reset:       RESETREAS=0x"));
     Serial.print(bootResetReas, HEX);
+    Serial.print(warmBoot() ? F(" warm") : F(" cold"));
     Serial.print(F(" USB="));
     Serial.println(Charger::usbPresent() ? F("yes") : F("no"));
     Serial.println();
@@ -597,7 +611,7 @@ void setup() {
     {
         const uint32_t notPowerOn = POWER_RESETREAS_SREQ_Msk | POWER_RESETREAS_DOG_Msk |
                                     POWER_RESETREAS_LOCKUP_Msk | POWER_RESETREAS_RESETPIN_Msk;
-        if (charger.hasControl() && Charger::usbPresent() && !(bootResetReas & notPowerOn)) {
+        if (charger.hasControl() && Charger::usbPresent() && !(bootResetReas & notPowerOn) && !warmBoot()) {
             runChargingScreen(true, false);
             fromChargingScreen = true;
         }
@@ -2628,7 +2642,7 @@ static void bootHoldGate() {
     const bool usb = NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk;
     const uint32_t notPowerOn = POWER_RESETREAS_SREQ_Msk | POWER_RESETREAS_DOG_Msk |
                                 POWER_RESETREAS_LOCKUP_Msk | POWER_RESETREAS_RESETPIN_Msk;
-    if (!dispOk || usb || (NRF_POWER->RESETREAS & notPowerOn)) {
+    if (!dispOk || usb || (NRF_POWER->RESETREAS & notPowerOn) || warmBoot()) {
         bootHoldResult = BootHold::SKIPPED;
         return;
     }

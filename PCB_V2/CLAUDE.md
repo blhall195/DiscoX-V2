@@ -401,8 +401,15 @@ on an old board never touches the charger pins.
   USB drive mode / storage repair it powered straight off. Check N on the
   new hardware; the filter assumes |N| well under 300.
 - **Charging screen** (`runChargingScreen`): at boot when a new board
-  cold-powers on with USB present (RESETREAS clear: resets, DFU and
-  post-update reboots boot normally), and from normal mode when the
+  cold-powers on with USB present. "Cold" needs more than RESETREAS: the
+  UF2 bootloader clears it, so v2.0.11 sent a board updated by UF2 to the
+  charging screen. Since v2.0.12 setup() writes `APP_RAN_MARK` to
+  GPREGRET2 on every boot; it survives resets and the bootloader and only
+  a real power loss clears it, so finding it means a reboot (`warmBoot()`,
+  also used by the boot-hold gate). Shown on the boot line as
+  `Reset: RESETREAS=0x.. warm|cold`. The first boot after updating from
+  older firmware is still "cold" (they cleared GPREGRET2). Charging screen
+  also opens from normal mode when the
   inactivity auto-off, the menu timeout or the standby timeout fires on USB.
   Battery icon in the same place as on the main screen (so burn-in lands
   on pixels lit anyway), gauge % to 2 d.p., Charging / Charged / Paused,
@@ -753,7 +760,8 @@ on an old board never touches the charger pins.
    unplug from the charging screen → off; 80% and 90% stop where they
    should (`g` shows `ce=HELD OFF`) and resume 5 points lower; a flat cell
    plugged in stays on; after a UF2 update with USB attached it boots
-   normally, not to the charging screen (RESETREAS on the boot line).
+   normally, not to the charging screen (boot line `Reset: ... warm`).
+   Verified 2026-11-21 on a new board (v2.0.12).
    Old board: boot serial says `no charger control`, no Charge limit
    menu item, LED/icon follow the gauge, nothing else changes.
 
