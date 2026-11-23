@@ -10,8 +10,8 @@
  *   0xED000 - 0xF4000   InternalFS LittleFS (28 KB, core-defined)
  *   0xF4000 - 0x100000  Adafruit UF2 bootloader + settings
  *
- * If the firmware outgrows 668 KB the link FAILS here instead of the app
- * silently overlapping the FAT partition.
+ * If the firmware outgrows 636 KB the link FAILS here instead of the app
+ * silently overlapping the history ring.
  */
 
 SEARCH_DIR(.)
@@ -19,7 +19,7 @@ GROUP(-lgcc -lc -lnosys)
 
 MEMORY
 {
-  FLASH (rx)     : ORIGIN = 0x26000, LENGTH = 0xCD000 - 0x26000
+  FLASH (rx)     : ORIGIN = 0x26000, LENGTH = 0xC5000 - 0x26000
 
   /* SRAM required by Softdevice depend on
    * - Attribute Table Size (Number of Services and Characteristics)

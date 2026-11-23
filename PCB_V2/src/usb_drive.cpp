@@ -1,6 +1,7 @@
 #include "usb_drive.h"
 #include "config_manager.h"
 #include "flash_layout.h"
+#include "history.h"
 
 #include <Adafruit_LittleFS.h>
 #include <Adafruit_TinyUSB.h>
@@ -223,6 +224,9 @@ static const char README_TEXT[] = "Mr Zappy USB drive mode\r\n"
                                   "CONFIG.JSON       device settings   - edit and save here\r\n"
                                   "CALIBRATION.JSON  sensor calibration - edit only if you know why\r\n"
                                   "READINGS.CSV      unsent survey legs (export only; edits ignored)\r\n"
+                                  "HISTORY.CSV       the last 500 readings, sent or not, newest first;\r\n"
+                                  "                  row n is \"n of ...\" when browsing with DOWN/UP\r\n"
+                                  "                  (export only; edits ignored)\r\n"
                                   "\r\n"
                                   "CONFIG.JSON settings worth knowing:\r\n"
                                   "  standby_timeout  seconds a short power-button press stays in\r\n"
@@ -231,6 +235,9 @@ static const char README_TEXT[] = "Mr Zappy USB drive mode\r\n"
                                   "                   boards only; 100 = full). A lower limit is kinder\r\n"
                                   "                   to the battery, but only holds while the device\r\n"
                                   "                   is on: switched off, it charges to 100%.\r\n"
+                                  "  show_horizontal  true = also show the horizontal distance\r\n"
+                                  "                   (slope x cos inclination), for drawing plan\r\n"
+                                  "                   views, above the slope distance. Default false.\r\n"
                                   "\r\n"
                                   "When done: eject the drive, then press MENU on the device (or just\r\n"
                                   "power-cycle it). Valid changes to CONFIG.JSON / CALIBRATION.JSON are\r\n"
@@ -245,6 +252,55 @@ static const char README_TEXT[] = "Mr Zappy USB drive mode\r\n"
                                   "storage ever has to be reset. Leave it alone; formatting this drive\r\n"
                                   "deletes it until the next save or power-on recreates it.\r\n";
 
+// The reading history (raw flash ring, see history_log.h) as CSV, newest
+// first so row n matches "n of total" on the device's history screen.
+static bool exportHistory() {
+    History::Log &log = History::device();
+    log.sync();
+    uint16_t count = log.count();
+
+    FIL dst;
+    if (f_open(&dst, "HISTORY.CSV", FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
+        Serial.println(F("  export open FAILED: HISTORY.CSV"));
+        return false;
+    }
+    static const char HEADER[] = "n,type,azimuth_deg,inclination_deg,distance_m\r\n";
+    UINT written = 0;
+    bool ok = f_write(&dst, HEADER, sizeof(HEADER) - 1, &written) == FR_OK && written == sizeof(HEADER) - 1;
+
+    // Lines batch through s_xferBuf so FatFs sees sector-sized writes
+    size_t fill = 0;
+    for (uint16_t i = 0; ok && i < count; i++) {
+        History::Entry e;
+        if (!log.get(i, e)) {
+            break;
+        }
+        const char *kind = e.kind == History::Kind::LEG     ? "leg"
+                           : e.kind == History::Kind::SPLAY ? "splay"
+                                                            : "shot";
+        char line[64];
+        int n = snprintf(line, sizeof(line), "%u,%s,%.2f,%.2f,%.3f\r\n", (unsigned)(i + 1), kind,
+                         (double)e.az, (double)e.inc, (double)e.dist);
+        if (n <= 0 || (size_t)n >= sizeof(line)) {
+            continue;
+        }
+        if (fill + (size_t)n > sizeof(s_xferBuf)) {
+            ok = f_write(&dst, s_xferBuf, (UINT)fill, &written) == FR_OK && written == fill;
+            fill = 0;
+        }
+        memcpy(s_xferBuf + fill, line, (size_t)n);
+        fill += (size_t)n;
+    }
+    if (ok && fill > 0) {
+        ok = f_write(&dst, s_xferBuf, (UINT)fill, &written) == FR_OK && written == fill;
+    }
+    f_close(&dst);
+    if (!ok) {
+        Serial.println(F("  export write FAILED: HISTORY.CSV"));
+    }
+    return ok;
+}
+
 bool exportFiles(ConfigManager &cfgMgr) {
     if (!mountOrFormat()) {
         return false;
@@ -257,6 +313,7 @@ bool exportFiles(ConfigManager &cfgMgr) {
     ok &= copyToFat("/config.json", "CONFIG.JSON", nullptr);
     ok &= copyToFat("/calibration.json", "CALIBRATION.JSON", nullptr);
     ok &= copyToFat("/pending.txt", "READINGS.CSV", "azimuth_deg,inclination_deg,distance_m\r\n");
+    ok &= exportHistory();
     ok &= copyToFat(nullptr, "README.TXT", README_TEXT);
 
     flash_nrf5x_flush();

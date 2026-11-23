@@ -46,6 +46,7 @@ struct Config {
     uint16_t laserSpreadLimitMm = Defaults::laserSpreadLimitMm;
     bool measureFromFront = Defaults::measureFromFront;
     bool splaysEnabled = Defaults::splaysEnabled;
+    bool showHorizontal = Defaults::showHorizontal;
     uint8_t screenBrightness = Defaults::screenBrightness;
     uint8_t splashStyle = Defaults::splashStyle;
     char bleName[Defaults::bleNameMaxLen + 1] = {}; // initialized in constructor

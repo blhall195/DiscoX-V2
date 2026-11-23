@@ -25,6 +25,13 @@ static constexpr int16_t DIST_Y = 34;
 static constexpr int16_t AZ_Y = 68;
 static constexpr int16_t INC_Y = 100;
 
+// Horizontal distance (optional) — the band between the status strip and
+// the distance row: a size-1 "Horiz" label at the left, the value at size 2
+// right-aligned. Glyph rows 18..31, clear of the distance row at 34.
+static constexpr int16_t HORIZ_Y = 18;
+static constexpr int16_t HORIZ_LABEL_Y = HORIZ_Y + 4;       // centred on the value
+static constexpr int16_t HORIZ_KIND_LABEL_Y = HORIZ_Y + 8;  // history: under the kind
+
 // Error detail line — text size 1, in the 10 px gap between the distance row
 // (34..57 at size 3) and the azimuth row. Only drawn while the distance field
 // shows an error headline, so it never displaces a reading. At size 1 the 6 px
@@ -211,6 +218,8 @@ void DisplayManager::updateBTNumber(uint16_t pending) { _btPending = pending; }
 
 void DisplayManager::updateMeasureFrom(bool front) { _measureFromFront = front; }
 
+void DisplayManager::updateShowHorizontal(bool show) { _showHorizontal = show; }
+
 void DisplayManager::showPowerPrompt(const char *const *lines, uint8_t count, float progress, const char *hint) {
     if (!_initialized) {
         return;
@@ -344,6 +353,56 @@ void DisplayManager::clearErrorScreen() {
     _distDetail[0] = '\0';
 }
 
+void DisplayManager::showHistory(uint16_t n, uint16_t total, const char *kind, float distance,
+                                 float azimuth, float inclination) {
+    if (!_initialized) {
+        return;
+    }
+    _display.clearDisplay();
+
+    // Banner: inverted strip where BT / battery normally sit, "n of total"
+    // centred at size 2 (10 columns: "500 of 500" just fits).
+    char banner[12];
+    snprintf(banner, sizeof(banner), "%u of %u", (unsigned)n, (unsigned)total);
+    // 17 rows, not 18: leaves a black row above the horizontal distance
+    _display.fillRect(0, 0, SH1107_WIDTH, 17, SH110X_WHITE);
+    _display.setTextColor(SH110X_BLACK);
+    _display.setTextSize(2);
+    _display.setCursor((SH1107_WIDTH - (int16_t)strlen(banner) * 12) / 2, 2);
+    _display.print(banner);
+
+    // Kind, size 1, centred in the gap above the distance row. With the
+    // horizontal distance in that gap it moves to the left, above "Horiz".
+    _display.setTextColor(SH110X_WHITE);
+    _display.setTextSize(1);
+    if (_showHorizontal) {
+        _display.setCursor(0, HORIZ_Y);
+        _display.print(kind);
+        drawHorizontal(distance, inclination, HORIZ_KIND_LABEL_Y);
+    } else {
+        _display.setCursor((SH1107_WIDTH - (int16_t)strlen(kind) * 6) / 2, 22);
+        _display.print(kind);
+    }
+
+    _display.setTextSize(3);
+    _display.setCursor(0, DIST_Y);
+    _display.print(distance, 2);
+    _display.print('m');
+
+    _display.setCursor(0, AZ_Y);
+    _display.print(azimuth, 1);
+    drawDegreeSymbol(AZ_Y);
+
+    _display.setCursor(0, INC_Y);
+    if (inclination >= 0.0f) {
+        _display.print('+');
+    }
+    _display.print(inclination, 1);
+    drawDegreeSymbol(INC_Y);
+
+    _display.display();
+}
+
 // ── Private drawing helpers ────────────────────────────────────────
 
 void DisplayManager::drawMainScreen() {
@@ -396,6 +455,11 @@ void DisplayManager::drawMainScreen() {
     } else if (_distance != 0.0f) {
         _display.print(_distance, 2);
         _display.print('m');
+        // _inclination is the shot's: the display stays frozen while a
+        // distance is shown (cleared to 0 on the next FIRE)
+        if (_showHorizontal) {
+            drawHorizontal(_distance, _inclination, HORIZ_LABEL_Y);
+        }
     }
 
     // ── Azimuth (size 3) ────────────────────────────────────────
@@ -459,6 +523,24 @@ void DisplayManager::drawErrorScreen() {
         _display.setCursor((SH1107_WIDTH - len * 12) / 2, y + (int16_t)i * ERR_BODY_LINE_H);
         _display.print(lines[i]);
     }
+}
+
+// For plan-view sketching on paper. labelY places the size-1 "Horiz" label
+// (the history screen stacks it under the reading's kind). Leaves text size 3.
+void DisplayManager::drawHorizontal(float distance, float inclination, int16_t labelY) {
+    // fabsf: cos(90 deg) in float is a hair below zero, which prints "-0.00"
+    float horiz = fabsf(distance * cosf(inclination * (float)M_PI / 180.0f));
+    char text[12];
+    snprintf(text, sizeof(text), "%.2fm", (double)horiz);
+
+    _display.setTextSize(1);
+    _display.setCursor(0, labelY);
+    _display.print(F("Horiz"));
+
+    _display.setTextSize(2);
+    _display.setCursor(SH1107_WIDTH - (int16_t)strlen(text) * 12, HORIZ_Y);
+    _display.print(text);
+    _display.setTextSize(3);
 }
 
 void DisplayManager::drawDegreeSymbol(int16_t y) {

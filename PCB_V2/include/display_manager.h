@@ -72,6 +72,10 @@ class DisplayManager {
     /// Update measure-from indicator (true = Front, false = Back)
     void updateMeasureFrom(bool front);
 
+    /// Also show the horizontal distance (slope x cos inclination) above the
+    /// slope distance, on the main and history screens (`show_horizontal`)
+    void updateShowHorizontal(bool show);
+
     /// Take over the whole panel with an error: a size-3 headline (max 7
     /// chars) over a size-2 remedy wrapped to at most 3 lines of 10 columns.
     /// `detail` may use '\n' to choose its own breaks. Stays up — including
@@ -82,6 +86,13 @@ class DisplayManager {
 
     /// Return to the normal readings screen after showErrorScreen().
     void clearErrorScreen();
+
+    /// A stored reading (DOWN/UP browsing in normal mode). Same rows as the
+    /// main screen, under an inverted "n of total" banner in place of the
+    /// status strip so it can't be mistaken for a live reading. n = 1 is the
+    /// newest. kind is a short label ("Leg", "Splay", "Shot"). Draws and pushes.
+    void showHistory(uint16_t n, uint16_t total, const char *kind, float distance, float azimuth,
+                     float inclination);
 
     /// Clear display to black
     void blankScreen();
@@ -134,8 +145,10 @@ class DisplayManager {
     bool _btConnected = false;
     uint16_t _btPending = 0;
     bool _measureFromFront = false;
+    bool _showHorizontal = false;
 
     void drawMainScreen();
+    void drawHorizontal(float distance, float inclination, int16_t labelY);
     void drawErrorScreen();
     void drawBattery(float pct);
     void drawDegreeSymbol(int16_t y);

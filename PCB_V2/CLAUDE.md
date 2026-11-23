@@ -97,7 +97,8 @@ V1 main board. Modes (menu / calibration / snake) short-circuit the loop.
 
 | Mode | FIRE (B1) | UP_DISCO (B2) | DOWN (B3) | MENU (B4) |
 |------|-----------|---------------|-----------|-----------|
-| Normal | take shot / wake laser | hold: disco toggle; short: splay shot | laser off (power saver; FIRE wakes it again). Disco on: Mario on/off | enter settings menu |
+| Normal | take shot / wake laser | hold: disco toggle; short: splay shot (splays off: open history) | open history at the newest reading + laser off (FIRE wakes it again). Disco on: Mario on/off | enter settings menu |
+| History (browsing) | back to live + wake laser | short: one newer; past the newest → live screen. Hold: disco (ends browsing) | one older (warning blip at the oldest kept) | back to live + settings menu |
 | Menu | select | up | down | select |
 | Calibration | record point / F-B shot | finish the F/B check; on the results screen hold with DOWN to save | undo last point / cancel capture (screen hint "DOWN:undo"); on the results screen hold to discard, or hold with UP to save | inert while collecting points (edge consumed so it can't fire on menu re-entry); any-button advance on intro screens |
 | Snake | — | turn right | turn left | exit |
@@ -123,7 +124,8 @@ Flash map (see `include/flash_layout.h`, enforced by
 
 ```
 0x00000-0x26000  SoftDevice S140
-0x26000-0xCD000  application (668 KB cap — LINK FAILS if outgrown; 57.8% used)
+0x26000-0xC5000  application (636 KB cap — LINK FAILS if outgrown; 70.2% used)
+0xC5000-0xCD000  reading history ring (32 KB, 2026-11-23 — see "Reading history")
 0xCD000-0xED000  FAT12 USB partition (128 KB, survives UF2/DFU flashes)
 0xED000-0xF4000  InternalFS LittleFS (core-fixed)
 0xF4000-…        UF2 bootloader
@@ -137,6 +139,7 @@ synced only at explicit points (avoids V1's FAT-as-primary fragility):
   flash writes, lets a PC reformat a corrupt partition. On entry the MSC
   interface is registered before USB enumerates, then LittleFS → FAT staging:
   `CONFIG.JSON`, `CALIBRATION.JSON`, `READINGS.CSV` (pending legs,
+  export-only), `HISTORY.CSV` (last 500 readings, newest first,
   export-only), `README.TXT`.
 - **Exit**: eject on the PC, press MENU → validated import → reboot. Plain
   power-off also works: the `usb_import` flag makes the next boot run the
@@ -194,6 +197,48 @@ Degraded path: if the RAM buffer cannot reach flash (unmounted, or the zombie
 filesystem that mounts and reads but refuses every commit), the drain serves
 readings straight from RAM rather than stranding them. That path is reachable
 only when `syncPendingToFlash()` fails.
+
+## Reading history (2026-11-23, built, not yet run on hardware)
+
+Customer request: scroll back through earlier readings on the device. The
+top-left number on the main screen is only the *undelivered* count, and
+`/pending.txt` forgets a reading once the phone ACKs it, so a separate log
+was needed.
+
+- **Store**: `History::Log` (`include/history_log.h`, `src/history_log.cpp`,
+  unit-tested in `test/test_history`), device glue in
+  `src/history_device.cpp`. A raw ring of 16-byte records (lifetime seq,
+  az/inc in 0.01°, dist in mm, kind shot/splay/leg, CRC-16) over 8 pages at
+  `0xC5000-0xCD000`, carved from the app region's unused tail (cap 668 →
+  636 KB). Not LittleFS: that is 28 KB in all, shared with settings,
+  calibration and bonds. Boot scans for the highest valid seq; anything else
+  in the region (erased, an old image's tail, a torn write) fails the CRC or
+  the seq chain and is ignored. Entering a page wipes it first.
+- **Wear**: the core HAL rewrites a whole page per flush, so each sync is
+  one erase; over 8 pages that is ~80,000 shots at the rated 10k cycles.
+  The ring holds 2048 records; only the newest 500 (`Log::KEEP`) are shown
+  or exported.
+- **Write path**: `handleMeasurementSuccess()` → `History::device().add()`
+  (RAM, 20 slots); `sync()` at the same idle point as the pending readings
+  (not gated on `flashOk`: it isn't LittleFS), and in `enterStandby()` and
+  `doShutdown()`. Every batch holds the LittleFS mutex
+  (`InternalFS._lockFS()`), because the flash page cache is shared and
+  Bluefruit writes bonds from another task. Don't call LittleFS while
+  holding it: the mutex is not recursive.
+- **Browsing** (main.cpp, "Reading history browser"): DOWN opens it at the
+  newest reading and turns the laser off; DOWN steps older, UP newer, and
+  UP past the newest returns to the live screen. UP stays the splay button
+  outside browsing when splays are on; with splays off, UP opens the
+  history too. FIRE/MENU leave it first. Ended as well by
+  a laser/shot started from the phone, disco, standby, the charging screen,
+  or 60 s without a press. Screen: `DisplayManager::showHistory`, an
+  inverted "n of total" banner (n = 1 newest), Leg/Splay/Shot, then the
+  usual three rows. "No saved readings" toast if empty. The old
+  "Splays not enabled" toast is gone (that press now browses).
+- Boot serial prints `History: N to browse, M recorded`.
+- Assumes, like the FAT partition, that DFU stays single-bank (the image
+  is above the bootloader's ~407 KB banked limit), so nothing is written
+  above the image. Worth confirming the history survives a DFU flash.
 
 ## Shot feedback is shared (2026-09-27)
 
@@ -474,12 +519,16 @@ on an old board never touches the charger pins.
   failure, so keep the floor above 15. Background: `discox-sq-rejection-brief.md`
   (note that brief repeats the manual's inverted claim).
 
-- **config.json holds user settings only** (2026-09-26). Twelve keys: `ble_name`,
+- **config.json holds user settings only** (2026-09-26). Thirteen keys: `ble_name`,
   `screen_brightness`, `auto_shutdown_timeout`, `laser_timeout`,
   `measure_from_front`, `splays_enabled`, `laser_wibble`,
   `anomaly_detection`, `cartesian_tolerance`, `steady_tolerance`,
   `standby_timeout` (seconds, default 600, 0 = no standby; 2026-10-03),
-  `charge_limit` (80/90/100, default 100; 2026-11-21). Every
+  `charge_limit` (80/90/100, default 100; 2026-11-21), `show_horizontal`
+  (default false, 2026-11-23: horizontal distance = slope x cos inc in the
+  band above the slope distance, main + history screens; USB drive only,
+  no menu item). A `show_horizontal_help` how-to string written beside it
+  was dropped before release and is in `kRetiredKeys`. Every
   other `Config` field (EMA alphas, stability window, `cal_*`, anomaly
   thresholds, laser SQ/spread/shots, laser offset, leg angle tolerance) is a
   firmware constant from `Defaults::` — `loadConfig()` starts from
@@ -764,6 +813,12 @@ on an old board never touches the charger pins.
    Verified 2026-11-21 on a new board (v2.0.12).
    Old board: boot serial says `no charger control`, no Charge limit
    menu item, LED/icon follow the gauge, nothing else changes.
+8. **Reading history (2026-11-23) needs a hardware run** — see "Reading
+   history". Take a few shots, a splay and a leg; DOWN shows them newest
+   first with the right labels, UP walks back to the live screen; the
+   laser goes off on the first DOWN; reboot (and a UF2 + a DFU update)
+   keeps them; USB drive mode shows HISTORY.CSV matching the screen. On a
+   unit updated from older firmware the first boot says `0 to browse`.
 
 ## Status
 

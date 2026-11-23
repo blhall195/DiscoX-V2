@@ -87,6 +87,10 @@ constexpr bool measureFromFront = false;        // false = Back (add offset), tr
 // stored config.json comes up with. A device that already has one keeps
 // whatever is in it; `splays_enabled` stays editable via USB drive mode.
 constexpr bool splaysEnabled = true;
+// Horizontal distance (slope x cos inclination) above the slope distance,
+// for drawing plan views on paper. Off by default; switched on only by
+// editing `show_horizontal` in CONFIG.JSON in USB drive mode (no menu item).
+constexpr bool showHorizontal = false;
 constexpr uint8_t screenBrightness = 255;       // OLED contrast 0-255
 // Boot animation (Splash::Style). Not a user setting: picked per firmware
 // release, so updating brings a new one. 2 = Mirror Ball (v2.0.7-v2.0.10),

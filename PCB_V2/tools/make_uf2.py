@@ -4,9 +4,9 @@
 # bootloader drive). The nrfutil DFU upload PlatformIO uses for development
 # doesn't need it, so nothing else in the build produces one.
 #
-# The image covers only the application region (0x26000-0xCD000 per
-# include/flash_layout.h), so flashing it preserves the FAT settings
-# partition and the LittleFS store holding config.json.
+# The image covers only the application region (0x26000-0xC5000 per
+# include/flash_layout.h), so flashing it preserves the reading history,
+# the FAT settings partition and the LittleFS store holding config.json.
 
 import os
 import subprocess

@@ -24,6 +24,7 @@
 #include "shot_capture.h"
 #include "snake_game.h"
 #include "feedback.h"
+#include "history.h"
 #include "sounds.h"
 #include "usb_drive.h"
 #include <Adafruit_TinyUSB.h>
@@ -324,7 +325,11 @@ static bool discoHolding = false;
 static bool discoTriggered = false; // true once disco toggled during this hold
 
 // ── Toast notifications ─────────────────────────────────────────────
-static uint32_t splaysToastTime = 0;
+// A two-line size-2 message that holds the panel for TOAST_MS (showToast).
+static uint32_t toastTime = 0;
+static const char *toastLine1 = "";
+static const char *toastLine2 = "";
+static constexpr uint32_t TOAST_MS = 1200;
 static uint32_t errorToastTime = 0;
 // How long the full-screen error holds the panel after the disco flashes
 // stop. Long enough to read a headline and two lines without being long
@@ -338,6 +343,19 @@ static void dismissErrorScreen() {
         display.clearErrorScreen();
     }
 }
+
+// ── Reading history browser (DOWN/UP in normal mode) ────────────────
+// DOWN steps back through stored readings (the first press shows the newest
+// and turns the laser off), UP steps forward again and past the newest
+// returns to the live screen. With splays off, UP also opens it. FIRE and
+// MENU leave it and then do their usual thing. Readings come from the
+// History log (include/history_log.h), not /pending.txt: that one only holds
+// what the phone hasn't ACKed yet.
+static bool browsing = false;
+static uint16_t browseBack = 0;      // 0 = newest
+static uint16_t browseCount = 0;     // readings available, counted on entry
+static uint32_t browseLastPress = 0; // back to live after BROWSE_TIMEOUT_MS
+static constexpr uint32_t BROWSE_TIMEOUT_MS = 60000;
 
 // ── BLE state ───────────────────────────────────────────────────────
 static bool lastBleConnected = false;
@@ -419,7 +437,8 @@ static void updateDisplay(uint32_t now);
 
 // ── Forward declarations — helpers ──────────────────────────────────
 static void handleBuzzerTestLine(char *line);
-static void showSplaysDisabledToast();
+static void showToast(const char *line1, const char *line2);
+static void exitBrowse();
 static void handleMeasurementSuccess();
 static void alertError(const char *errCode, const char *detail = nullptr);
 static void resetLaser();
@@ -506,6 +525,10 @@ void setup() {
     // garbage from a save-path stack overflow made the first write loop
     // forever), so both button routes below are checked BEFORE the first
     // configMgr.begin().
+    //
+    // The reading history is read first: it is raw flash outside LittleFS
+    // (no mount, no writes), and USB drive mode exports it.
+    History::device().begin();
     {
         // Last run died on a littlefs assert (see __assert_func) — offer the
         // repair before anything touches the damaged filesystem again.
@@ -651,6 +674,7 @@ void setup() {
     if (dispOk) {
         display.updateBattery(lastBatPct);
         display.updateMeasureFrom(ctx.config.measureFromFront);
+        display.updateShowHorizontal(ctx.config.showHorizontal);
         display.initScreen();
     }
 
@@ -702,6 +726,7 @@ void setup() {
     if (dispOk) {
         display.updateBattery(lastBatPct);
         display.updateMeasureFrom(ctx.config.measureFromFront);
+        display.updateShowHorizontal(ctx.config.showHorizontal);
         display.initScreen();
     }
 
@@ -1111,6 +1136,7 @@ void loop() {
         menuMgr.clearExitAction();
         Serial.println(F("Returning to normal mode"));
         display.updateMeasureFrom(ctx.config.measureFromFront);
+        display.updateShowHorizontal(ctx.config.showHorizontal);
         display.initScreen();
         ctx.lastActivityTime = millis();
         delay(Timing::LOOP_INTERVAL_MS);
@@ -1169,6 +1195,9 @@ void loop() {
     // ── Deferred flash write: sync RAM-buffered readings when idle ──
     if (ctx.currentState == SystemState::IDLE && flashOk && configMgr.hasPendingToSync()) {
         configMgr.syncPendingToFlash();
+    }
+    if (ctx.currentState == SystemState::IDLE && History::device().hasUnsynced()) {
+        History::device().sync(); // raw flash, so not gated on flashOk (LittleFS)
     }
 
     delay(Timing::LOOP_INTERVAL_MS);
@@ -1591,21 +1620,105 @@ static void handleBuzzerTestLine(char *line) {
     }
 }
 
-static void showSplaysDisabledToast() {
+static void drawToast() {
+    auto &d = display.getDisplay();
+    d.clearDisplay();
+    d.setTextColor(SH110X_WHITE);
+    d.setTextSize(2);
+    d.setCursor(0, 44);
+    d.println(toastLine1);
+    d.println(toastLine2);
+    d.display();
+}
+
+// Lines must be string literals (kept by pointer until the toast ends)
+static void showToast(const char *line1, const char *line2) {
+    toastLine1 = line1;
+    toastLine2 = line2;
     if (dispOk) {
-        auto &d = display.getDisplay();
-        d.clearDisplay();
-        d.setTextColor(SH110X_WHITE);
-        d.setTextSize(2);
-        d.setCursor(0, 44);
-        d.println(F("Splays not"));
-        d.println(F("enabled"));
-        d.display();
+        drawToast();
     }
-    splaysToastTime = millis();
+    toastTime = millis();
+}
+
+// ── Reading history browser ─────────────────────────────────────
+static const char *historyKindLabel(History::Kind k) {
+    switch (k) {
+    case History::Kind::LEG:
+        return "Leg";
+    case History::Kind::SPLAY:
+        return "Splay";
+    default:
+        return "Shot";
+    }
+}
+
+static void showBrowsed() {
+    History::Entry e;
+    if (!History::device().get(browseBack, e)) {
+        exitBrowse();
+        return;
+    }
+    display.showHistory(browseBack + 1, browseCount, historyKindLabel(e.kind), e.dist, e.az, e.inc);
+}
+
+static void enterBrowse(uint32_t now) {
+    if (ctx.laserEnabled) {
+        laserOff(); // the laser is the big idle draw; nobody aims while reading back
+        Serial.println(F("LASER: off (browsing)"));
+    }
+    if (!dispOk) {
+        return;
+    }
+    dismissErrorScreen();
+    browseCount = History::device().count();
+    if (browseCount == 0) {
+        showToast("No saved", "readings");
+        Sounds::warning();
+        return;
+    }
+    browsing = true;
+    browseBack = 0;
+    browseLastPress = now;
+    Serial.print(F("HISTORY: browsing, "));
+    Serial.print(browseCount);
+    Serial.println(F(" readings"));
+    showBrowsed();
+}
+
+// Back to the readings screen it left (live, or the frozen last shot).
+// Safe to call when not browsing.
+static void exitBrowse() {
+    if (!browsing) {
+        return;
+    }
+    browsing = false;
+    lastDisplayRefresh = 0; // redraw the main screen on the next pass
+    Serial.println(F("HISTORY: back to live"));
+}
+
+static void browseOlder(uint32_t now) {
+    browseLastPress = now;
+    if (browseBack + 1 < browseCount) {
+        browseBack++;
+        showBrowsed();
+    } else {
+        Sounds::warning(); // the oldest one kept
+    }
+}
+
+static void browseNewer(uint32_t now) {
+    browseLastPress = now;
+    if (browseBack == 0) {
+        exitBrowse();
+        return;
+    }
+    browseBack--;
+    showBrowsed();
 }
 
 static void startDisco() {
+    exitBrowse();
     disco.turnOn();
     ctx.discoOn = true;
     laser.setLaser(false);
@@ -1666,6 +1779,7 @@ static void pollButtons(uint32_t now) {
     if (buttons.wasPressed(Button::FIRE)) {
         ctx.lastActivityTime = now;
         ctx.purpleLatched = false;
+        exitBrowse(); // straight back to aiming: FIRE wakes the laser as usual
 
         if (ctx.laserEnabled) {
             startShot(REGULAR_SHOT);
@@ -1677,7 +1791,9 @@ static void pollButtons(uint32_t now) {
     }
 
     // Button 2 (UP_DISCO)
-    // Long press to toggle disco, short press for splay/quick shot
+    // Long press to toggle disco. Short press: one step forward while
+    // browsing the history, else a splay/quick shot, or (splays off) open
+    // the history.
     if (buttons.isPressed(Button::UP_DISCO)) {
         ctx.lastActivityTime = now;
         if (!discoHolding) {
@@ -1691,19 +1807,18 @@ static void pollButtons(uint32_t now) {
             }
         }
         return;
-    } else { // Short press -> splay shot
+    } else { // Released before the disco hold: a short press
         if (discoHolding) {
             discoHolding = false;
 
             if (discoTriggered) {
                 discoTriggered = false;
-            } else {
-                if (ctx.config.splaysEnabled) {
-                    ctx.laserEnabled ? startShot(QUICK_SHOT) : prepareForShot();
-                } else {
-                    showSplaysDisabledToast();
-                    Sounds::warning();
-                }
+            } else if (browsing) {
+                browseNewer(now);
+            } else if (ctx.config.splaysEnabled) {
+                ctx.laserEnabled ? startShot(QUICK_SHOT) : prepareForShot();
+            } else if (!ctx.discoOn) {
+                enterBrowse(now);
             }
             return;
         }
@@ -1712,6 +1827,7 @@ static void pollButtons(uint32_t now) {
     // Button 4 (MENU)
     if (buttons.wasPressed(Button::MENU) && ctx.currentState == SystemState::IDLE) {
         ctx.lastActivityTime = now;
+        exitBrowse();
         Serial.println(F("MENU pressed — entering menu mode"));
         laser.setLaser(false);
         ctx.laserEnabled = false;
@@ -1722,16 +1838,21 @@ static void pollButtons(uint32_t now) {
         return;
     }
 
-    // Button 3 (DOWN): laser off — the laser is the largest continuous draw
-    // while idling and the timeout can be set as long as 30 min, so this is
-    // the manual way to stop burning battery between stations. FIRE brings
-    // it back (prepareForShot), so DOWN only ever turns the beam OFF: a
-    // stray press underground can cost a re-press, never light it unasked.
+    // Button 3 (DOWN): step back through the reading history, the first press
+    // showing the newest. Opening it also turns the laser off: the laser is
+    // the largest continuous draw while idling and the timeout can be set as
+    // long as 30 min, so DOWN has always been the manual way to stop burning
+    // battery between stations. FIRE brings it back (prepareForShot), so
+    // DOWN never lights the beam unasked.
     //
     // Inside disco mode DOWN keeps its Mario easter egg instead — disco is
     // the play mode, and the tune needs a button to stop it again.
     if (buttons.wasPressed(Button::DOWN) && ctx.currentState == SystemState::IDLE) {
         ctx.lastActivityTime = now;
+        if (browsing) {
+            browseOlder(now);
+            return;
+        }
         if (ctx.discoOn) {
             if (Sounds::melodyPlaying()) {
                 Sounds::stopMelody();
@@ -1742,12 +1863,7 @@ static void pollButtons(uint32_t now) {
             }
             return;
         }
-        if (ctx.laserEnabled) {
-            laserOff();
-            Sounds::click(); // the beam vanishing is the real feedback; this
-                             // just confirms the press registered
-            Serial.println(F("LASER: off (DOWN)"));
-        }
+        enterBrowse(now);
         return;
     }
 
@@ -2034,12 +2150,21 @@ static void handleMeasurementSuccess() {
     // silently while the device showed it as sent.
     configMgr.appendPendingReading(ctx.readings.azimuth, ctx.readings.inclination, ctx.readings.distance);
     ctx.bleDisconnectionCounter++;
+
+    // The browsable history keeps every reading, delivered or not. RAM only
+    // here; it reaches flash once the loop is idle, like the pending ones.
+    History::Entry hist;
+    hist.az = ctx.readings.azimuth;
+    hist.inc = ctx.readings.inclination;
+    hist.dist = ctx.readings.distance;
     if (dispOk) {
         display.updateBTNumber(ctx.bleDisconnectionCounter);
     }
 
     // ── Leg consistency buffer (skip for quick shots) ─────────
     if (ctx.quickShot) {
+        hist.kind = History::Kind::SPLAY;
+        History::device().add(hist);
         Serial.println(F("  HS:3 quick shot — skipping leg buf"));
         ctx.measurementTaken = false;
         Feedback::splayOk(disco);
@@ -2053,7 +2178,11 @@ static void handleMeasurementSuccess() {
     Serial.println(F("  HS:4 leg check"));
     Serial.flush();
 
-    if (ctx.shotBuf.hasValidLeg()) {
+    bool legDone = ctx.shotBuf.hasValidLeg();
+    hist.kind = legDone ? History::Kind::LEG : History::Kind::SHOT;
+    History::device().add(hist);
+
+    if (legDone) {
         Feedback::legComplete(disco, laser, ctx.config.laserWibble);
         ctx.shotBuf.clear();
         ctx.purpleLatched = true; // purple held until the next FIRE
@@ -2259,6 +2388,7 @@ static void pollBLECommands(uint32_t now) {
 
     case BleCommand::START_CAL:
         Serial.println(F("BLE: entering menu mode"));
+        exitBrowse();
         laserOff();
         disco.turnOff();
         ctx.discoOn = false;
@@ -2372,7 +2502,9 @@ static void enterStandby(uint32_t now) {
     if (flashOk && configMgr.hasPendingToSync()) {
         configMgr.syncPendingToFlash();
     }
+    History::device().sync();
     flash_nrf5x_flush();
+    exitBrowse(); // wake lands on the reading screen
     if (dispOk) {
         display.setSleep(true);
     }
@@ -2941,6 +3073,7 @@ static void chargingScreenPowerHold() {
 static void runChargingScreen(bool atBoot, bool startDark) {
     Serial.println(atBoot ? F("CHARGING SCREEN: plugged in while off") : F("CHARGING SCREEN: timeout on USB"));
     if (!atBoot) {
+        exitBrowse();
         if (menuMgr.isActive()) {
             menuMgr.close();
         }
@@ -3159,25 +3292,30 @@ static void updateDisplay(uint32_t now) {
         return;
     }
 
-    // Show "Splays not enabled" toast for 2s, suppressing normal refresh.
+    // A toast holds the panel for TOAST_MS, suppressing normal refresh.
     // Use millis() not now — now is stale from the top of loop() and may
-    // predate splaysToastTime (set after a blocking beep), causing underflow.
-    if (splaysToastTime != 0) {
-        if (millis() - splaysToastTime < 1200) {
+    // predate toastTime (set after a blocking beep), causing underflow.
+    if (toastTime != 0) {
+        if (millis() - toastTime < TOAST_MS) {
             if (now - lastDisplayRefresh >= Timing::DISPLAY_REFRESH_MS) {
                 lastDisplayRefresh = now;
-                auto &d = display.getDisplay();
-                d.clearDisplay();
-                d.setTextColor(SH110X_WHITE);
-                d.setTextSize(2);
-                d.setCursor(0, 44);
-                d.println(F("Splays not"));
-                d.println(F("enabled"));
-                d.display();
+                drawToast();
             }
             return;
         } else {
-            splaysToastTime = 0;
+            toastTime = 0;
+        }
+    }
+
+    // The history screen is static (redrawn on each press). Anything that
+    // makes the live screen matter again ends it: a shot or the laser started
+    // from the phone, disco, or a minute without a press.
+    if (browsing) {
+        if (ctx.laserEnabled || ctx.currentState != SystemState::IDLE || ctx.discoOn ||
+            millis() - browseLastPress >= BROWSE_TIMEOUT_MS) {
+            exitBrowse();
+        } else {
+            return;
         }
     }
 
@@ -3271,6 +3409,7 @@ static void doShutdown() {
     if (flashOk && configMgr.hasPendingToSync()) {
         configMgr.syncPendingToFlash();
     }
+    History::device().sync();
     // Every save runs to completion on this same loop task before we can
     // get here, so no write is ever cut mid-commit by a firmware power-off.
     // What can remain is the flash HAL's one-page write cache — commit it
@@ -3637,6 +3776,11 @@ static void initFlash() {
             ctx.bleDisconnectionCounter = pending;
             configMgr.beginDrain();
         }
+        Serial.print(F("  History: "));
+        Serial.print(History::device().count());
+        Serial.print(F(" to browse, "));
+        Serial.print(History::device().total());
+        Serial.println(F(" recorded"));
 
         if (configMgr.hasFlag(Flags::CALIBRATION)) {
             configMgr.clearFlag(Flags::CALIBRATION);

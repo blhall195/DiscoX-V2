@@ -176,8 +176,10 @@ bool ConfigManager::loadConfig(Config &cfg) {
     static const char *const kUserKeys[] = {
         "ble_name",         "screen_brightness", "auto_shutdown_timeout", "laser_timeout",
         "measure_from_front", "splays_enabled",  "laser_wibble",          "anomaly_detection",
-        "cartesian_tolerance", "steady_tolerance", "standby_timeout", "charge_limit"};
+        "cartesian_tolerance", "steady_tolerance", "standby_timeout", "charge_limit",
+        "show_horizontal"};
     static const char *const kRetiredKeys[] = {
+        "show_horizontal_help", // in-file how-to, dropped before release
         "mag_tolerance", "grav_tolerance", "dip_tolerance", "stability_tolerance",
         "stability_buffer_length", "ema_alpha_stable", "ema_alpha_moving", "filter_tuning",
         "leg_angle_tolerance", "laser_distance_offset", "cal_mag_consistency",
@@ -203,6 +205,7 @@ bool ConfigManager::loadConfig(Config &cfg) {
     cfg.chargeLimit = ChargePolicy::sanitiseLimit(doc["charge_limit"] | (int)Defaults::chargeLimit);
     cfg.measureFromFront = doc["measure_from_front"] | Defaults::measureFromFront;
     cfg.splaysEnabled = doc["splays_enabled"] | Defaults::splaysEnabled;
+    cfg.showHorizontal = doc["show_horizontal"] | Defaults::showHorizontal;
     cfg.laserWibble = doc["laser_wibble"] | Defaults::laserWibble;
     cfg.anomalyDetection = doc["anomaly_detection"] | Defaults::anomalyDetection;
     cfg.cartesianTolerance = doc["cartesian_tolerance"] | Defaults::cartesianTolerance;
@@ -240,6 +243,7 @@ bool ConfigManager::saveConfig(const Config &cfg) {
     doc["charge_limit"] = (int)cfg.chargeLimit;
     doc["measure_from_front"] = cfg.measureFromFront;
     doc["splays_enabled"] = cfg.splaysEnabled;
+    doc["show_horizontal"] = cfg.showHorizontal;
     doc["laser_wibble"] = cfg.laserWibble;
     doc["anomaly_detection"] = cfg.anomalyDetection;
     doc["cartesian_tolerance"] = cfg.cartesianTolerance;
