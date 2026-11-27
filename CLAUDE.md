@@ -19,6 +19,11 @@ module that replaces both V1 MCUs. Two folders:
   netlist (`hardware/NETLIST.md`) and datasheets. Its CLAUDE.md has the
   per-IC verification status and the pattern for adding IC tests. Come back
   here to isolate a suspected hardware fault to one IC.
+- **`PCB_V2 rangefinder/`** — a stripped-down firmware for the same board
+  (2026-11-27): laser distance only, plus a menu with the shutdown and
+  laser timeouts, Update (UF2 drive) and Power off. Swappable with the full
+  firmware by UF2 without disturbing its data. Not in CI or releases. Its
+  CLAUDE.md lists what was dropped and how it shares `config.json`.
 
 ## Releasing — the release notes are customer-facing copy
 

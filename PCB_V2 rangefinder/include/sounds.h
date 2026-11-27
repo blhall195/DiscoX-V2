@@ -1,0 +1,55 @@
+#pragma once
+
+#include <stdint.h>
+
+// ── UI sound vocabulary ──────────────────────────────────────────────
+// Every noise the device makes is defined in src/sounds.cpp — one blocking
+// function per event, so tweaking a tune means editing exactly one place.
+// All sounds are blocking (the buzzer driver is a bit-bang); the longest
+// (legComplete) is ~0.6 s.
+//
+// The piezo is a 4 kHz resonant element: it is LOUD at 4 kHz and gets
+// quieter the further a note sits from resonance. Success sounds therefore
+// end at/near 4 kHz; sad sounds fall away from it.
+
+class Buzzer;
+
+namespace Sounds {
+
+// Must be called once (after Buzzer::begin) before any sound plays.
+// Sounds are silently skipped until then.
+void begin(Buzzer &buzzer);
+
+void shotStart();   // measurement started / laser fired: short crisp click
+void click();       // generic short confirmation blip (calibration points, etc.)
+void readingOk();   // reading captured: rising third landing on the 3.85 kHz peak
+void splayOk();     // splay (quick shot) captured: single flat beep on the peak
+void legComplete(); // 3 consistent shots: rising three-note fanfare
+void warning();     // soft refusal (e.g. splays disabled): two mid blips
+void error();       // measurement/system error: sad falling womp
+
+// ── Snake game ──
+void snakeStart();             // game begins: quick rising "ready" chirp
+void snakeEat(uint16_t score); // food eaten: pickup blip that climbs with the score
+void snakeCrash(uint8_t n);    // game over: falling womp per red flash (n = 0,1,2…)
+
+// ── Background melody (the ONLY non-blocking sound) ──────────────────
+// Everything above blocks for its whole duration, which is fine at ~0.6 s
+// but impossible for a tune: the loop must keep running so the LEDs animate
+// and the buttons that stop it still get polled. startMelody() returns
+// immediately and updateMelody() must be called every loop iteration to
+// advance the notes.
+void startMelody(); // disco easter egg: Mario theme, loops until stopped
+void updateMelody();
+void stopMelody();
+bool melodyPlaying();
+
+// ── Melody → LED sync ───────────────────────────────────────────────
+// Lets the caller flash the lights in time with the tune. The serial number
+// steps on every slot the melody starts, rests included, so "a new note just
+// began" is a change in this value — no need to poll faster than the music.
+// Polled rather than pushed so Sounds stays free of any LED dependency.
+uint32_t melodyNoteSerial();
+uint16_t melodyNoteFreq(); // Hz of the current slot, 0 = rest
+
+} // namespace Sounds
